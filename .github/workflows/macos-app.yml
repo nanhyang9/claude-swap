@@ -1,0 +1,40 @@
+name: macOS app
+
+# Builds the native menu bar app (macos/CswapBar). Swift/SwiftUI only build on
+# macOS, so this is the only place the app is compiled in CI.
+on:
+  push:
+    paths:
+      - 'macos/**'
+      - '.github/workflows/macos-app.yml'
+  pull_request:
+    paths:
+      - 'macos/**'
+      - '.github/workflows/macos-app.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Build the app bundle
+        working-directory: macos/CswapBar
+        run: ./build-app.sh
+
+      - name: Check the bundle
+        working-directory: macos/CswapBar
+        run: |
+          plutil -lint "build/Claude Swap Bar.app/Contents/Info.plist"
+          codesign --verify --verbose "build/Claude Swap Bar.app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claude-swap-bar-app
+          path: macos/CswapBar/build/

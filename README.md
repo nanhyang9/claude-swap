@@ -275,6 +275,19 @@ The agent lives at `~/Library/LaunchAgents/com.cswap.menubar.plist` and logs to 
 
 </details>
 
+### Native macOS app (menu bar panel)
+
+`macos/CswapBar` is a small native SwiftUI app: a menu bar icon that opens a
+panel with every account's usage bars, reset countdowns, the ChatGPT (Codex)
+usage, and one-click switching. It drives the `cswap` command, so claude-swap
+must be installed. Build it with Xcode's command line tools:
+
+```bash
+cd macos/CswapBar && ./build-app.sh --install
+```
+
+See [macos/CswapBar/README.md](macos/CswapBar/README.md).
+
 ## Advanced
 
 ### Configuration
