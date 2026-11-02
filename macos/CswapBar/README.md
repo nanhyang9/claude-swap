@@ -27,8 +27,8 @@ cd macos/CswapBar
 ./build-app.sh --install     # builds, copies to /Applications, launches it
 ```
 
-`./build-app.sh` alone leaves the app in `build/Claude Swap Bar.app` (roughly
-70–80 MB). The app is ad-hoc signed, which is enough to run it on the Mac that
+`./build-app.sh` alone leaves the app in `build/Claude Swap Bar.app` (about
+85 MB). The app is ad-hoc signed, which is enough to run it on the Mac that
 built it. To pick up a newer claude-swap, pull and run the script again.
 
 ### Using the same claude-swap from a terminal
