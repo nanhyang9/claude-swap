@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Runs the `cswap` command line tool and decodes its `--json` output.
@@ -109,15 +110,78 @@ enum CswapCLI {
         _ = try checked(runCswap(["switch", "--strategy", "best", "--json"], timeout: 90))
     }
 
+    /// `cswap setup-token -`: the token goes in on stdin, never on the
+    /// command line (where other processes could see it). An existing
+    /// account with the same email has its token replaced in place.
+    static func addToken(_ token: String, email: String?, alias: String?) throws {
+        var args = ["setup-token", "-"]
+        if let email { args += ["--email", email] }
+        if let alias { args += ["--alias", alias] }
+        _ = try checked(runCswap(args, timeout: 60, input: Data((token + "\n").utf8)))
+    }
+
+    /// `cswap add`: back up the current Claude Code login as an account.
+    static func addCurrentLogin() throws {
+        _ = try checked(runCswap(["add"], timeout: 90))
+    }
+
+    /// Run a cswap command in a new Terminal window (for interactive ones).
+    ///
+    /// Writes a throwaway `.command` script and opens it, which needs no
+    /// Automation permission; the script deletes itself when it starts.
+    static func openInTerminal(_ arguments: [String]) throws {
+        guard let cswap = locate() else { throw Failure.notFound }
+        var command: [String]
+        if cswap.isBundled, let launcher = bundledLauncher {
+            command = [launcher]
+        } else {
+            command = [cswap.executable] + cswap.leadingArguments
+        }
+        command += arguments
+        let line = command.map(shellQuote).joined(separator: " ")
+        let script = """
+        #!/bin/sh
+        rm -f "$0"
+        clear
+        \(line)
+        echo
+        printf 'Done. You can close this window.'
+        read -r _
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-swap-\(UUID().uuidString).command")
+        try script.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        guard NSWorkspace.shared.open(url) else {
+            throw Failure.command("Could not open Terminal.")
+        }
+    }
+
+    /// The `cswap` launcher build-app.sh puts in the bundle.
+    static var bundledLauncher: String? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let path = resources.appendingPathComponent("bin/cswap").path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     // MARK: - Plumbing
 
-    private static func runCswap(_ arguments: [String], timeout: TimeInterval) throws -> Output {
+    private static func runCswap(
+        _ arguments: [String],
+        timeout: TimeInterval,
+        input: Data? = nil
+    ) throws -> Output {
         guard let cswap = locate() else { throw Failure.notFound }
         return try run(
             executable: cswap.executable,
             arguments: cswap.leadingArguments + arguments,
             timeout: timeout,
-            bundledPython: cswap.isBundled
+            bundledPython: cswap.isBundled,
+            input: input
         )
     }
 
@@ -155,15 +219,21 @@ enum CswapCLI {
         if stderr.contains("no command given") || stderr.contains("invalid choice") {
             return .command("This cswap version does not support this command — update claude-swap.")
         }
-        let lastLine = stderr.split(separator: "\n").last.map(String.init)
-        return .command(lastLine ?? "cswap exited with status \(output.status).")
+        guard var lastLine = stderr.split(separator: "\n").last.map(String.init) else {
+            return .command("cswap exited with status \(output.status).")
+        }
+        if lastLine.hasPrefix("Error: ") {
+            lastLine.removeFirst("Error: ".count)
+        }
+        return .command(lastLine)
     }
 
     static func run(
         executable: String,
         arguments: [String],
         timeout: TimeInterval,
-        bundledPython: Bool = false
+        bundledPython: Bool = false,
+        input: Data? = nil
     ) throws -> Output {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -187,12 +257,21 @@ enum CswapCLI {
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
-        process.standardInput = FileHandle.nullDevice
+        let inPipe: Pipe? = input == nil ? nil : Pipe()
+        if let inPipe {
+            process.standardInput = inPipe
+        } else {
+            process.standardInput = FileHandle.nullDevice
+        }
 
         do {
             try process.run()
         } catch {
             throw Failure.command("Could not start \(executable): \(error.localizedDescription)")
+        }
+        if let inPipe, let input {
+            inPipe.fileHandleForWriting.write(input)
+            try? inPipe.fileHandleForWriting.close()
         }
 
         // Drain both pipes concurrently so a large output can't block the child.

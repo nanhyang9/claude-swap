@@ -13,6 +13,7 @@ import ServiceManagement
 final class UsageStore: ObservableObject {
     @Published private(set) var accounts: [Account] = []
     @Published private(set) var errorMessage: String?
+    @Published private(set) var noticeMessage: String?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var isLoading = false
     @Published private(set) var busyMessage: String?
@@ -109,27 +110,76 @@ final class UsageStore: ObservableObject {
 
     // MARK: - Actions
 
+    func clearMessages() {
+        errorMessage = nil
+        noticeMessage = nil
+    }
+
     func switchTo(_ account: Account) {
-        perform("Switching to \(account.displayName)…") {
+        perform("Switching to \(account.displayName)…",
+                success: "Switched to \(account.displayName).") {
             try CswapCLI.switchTo(account.number)
         }
     }
 
     func switchToBest() {
-        perform("Switching to the account with the most quota…") {
+        perform("Switching to the account with the most quota…",
+                success: "Switched to the account with the most quota left.") {
             try CswapCLI.switchBest()
         }
     }
 
-    private func perform(_ message: String, _ action: @escaping @Sendable () throws -> Void) {
+    /// Add (or, for an existing email, replace) an account from a token.
+    func addToken(_ token: String, email: String?, alias: String?,
+                  completion: @escaping (Bool) -> Void) {
+        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        perform("Adding the token…", success: "Account saved.", completion: completion) {
+            try CswapCLI.addToken(value, email: email, alias: alias)
+        }
+    }
+
+    func addCurrentLogin(completion: @escaping (Bool) -> Void) {
+        perform("Adding the current Claude Code login…", success: "Account saved.",
+                completion: completion) {
+            try CswapCLI.addCurrentLogin()
+        }
+    }
+
+    /// `claude setup-token` needs a terminal (browser sign-in, pasted code),
+    /// so it runs in Terminal; the new account shows up on the next refresh.
+    func createTokenInTerminal(email: String?, alias: String?) {
+        clearMessages()
+        var args = ["setup-token", "--new"]
+        if let email { args += ["--email", email] }
+        if let alias { args += ["--alias", alias] }
+        do {
+            try CswapCLI.openInTerminal(args)
+            noticeMessage = "Finish in the Terminal window. The account appears here when it's done."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func perform(
+        _ message: String,
+        success: String? = nil,
+        completion: ((Bool) -> Void)? = nil,
+        _ action: @escaping () throws -> Void
+    ) {
         guard busyMessage == nil else { return }
+        clearMessages()
         busyMessage = message
         Task.detached(priority: .userInitiated) {
             let result = Result(catching: action)
             await MainActor.run {
                 self.busyMessage = nil
-                if case .failure(let error) = result {
+                switch result {
+                case .success:
+                    self.noticeMessage = success
+                    completion?(true)
+                case .failure(let error):
                     self.errorMessage = error.localizedDescription
+                    completion?(false)
                 }
                 self.refresh()
             }
