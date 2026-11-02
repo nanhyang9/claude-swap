@@ -5,16 +5,20 @@ with every account's 5-hour / 7-day usage (bars, reset countdowns, per-model
 limits), the ChatGPT (Codex) plan usage, and buttons to switch accounts. The
 menu bar itself shows the active account's 5h · 7d percentages.
 
-It is a front end only: all data and actions go through the `cswap` command
-(`cswap list --json`, `cswap chatgpt --json`, `cswap switch N`), so credentials,
-locking and API pacing stay in claude-swap. That means **claude-swap must be
-installed** (with the ChatGPT command, i.e. a version that has `cswap chatgpt`).
+The app is self-contained: `build-app.sh` puts a Python runtime
+([python-build-standalone](https://github.com/astral-sh/python-build-standalone),
+pinned and checksum-verified) with claude-swap from this checkout inside the
+`.app`, and the app drives that copy (`list --json`, `chatgpt --json`,
+`switch N`). Credentials, locking and API pacing are claude-swap's own code, so
+nothing is reimplemented and **claude-swap does not need to be installed
+separately**. Claude Code itself is still needed (it is what you log in with).
 
 ## Requirements
 
 - macOS 13 (Ventura) or later
-- Xcode or the Xcode Command Line Tools (`xcode-select --install`) for `swift`
-- claude-swap installed, e.g. `uv tool install claude-swap`
+- Xcode or the Xcode Command Line Tools (`xcode-select --install`) to build
+- Internet access while building (downloads the ~25 MB Python runtime once,
+  then installs claude-swap's dependencies from PyPI)
 
 ## Build and install
 
@@ -23,8 +27,23 @@ cd macos/CswapBar
 ./build-app.sh --install     # builds, copies to /Applications, launches it
 ```
 
-`./build-app.sh` alone leaves the app in `build/Claude Swap Bar.app`. The app
-is ad-hoc signed, which is enough to run it on the Mac that built it.
+`./build-app.sh` alone leaves the app in `build/Claude Swap Bar.app` (roughly
+70–80 MB). The app is ad-hoc signed, which is enough to run it on the Mac that
+built it. To pick up a newer claude-swap, pull and run the script again.
+
+### Using the same claude-swap from a terminal
+
+The bundle contains a `cswap` launcher for its copy. Linking it onto your PATH
+keeps the terminal and the app on one version:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "/Applications/Claude Swap Bar.app/Contents/Resources/bin/cswap" ~/.local/bin/cswap
+```
+
+If you already have claude-swap installed with uv/pipx, prefer one or the
+other: both copies share the same data directory, and two different versions
+working on it is not something claude-swap is tested for.
 
 ## Using it
 
@@ -35,9 +54,9 @@ is ad-hoc signed, which is enough to run it on the Mac that built it.
 - **Refresh**: re-reads cswap now. Claude usage is still paced by cswap
   (an account is fetched at most every few minutes), ChatGPT usage is
   fetched again immediately.
-- **Settings** (gear): show/hide ChatGPT, launch at login, and the path to
-  `cswap` if it is not found automatically (it looks in `~/.local/bin`,
-  `/opt/homebrew/bin`, `/usr/local/bin`, then asks your login shell).
+- **Settings** (gear): show/hide ChatGPT, launch at login, and which
+  claude-swap is used — the bundled one by default, or the path of another
+  `cswap` you set there.
 
 The panel re-reads cswap every 60 seconds and ChatGPT every 5 minutes.
 

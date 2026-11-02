@@ -339,7 +339,10 @@ struct SettingsPanel: View {
                 set: { store.setLaunchAtLogin($0) }
             ))
             VStack(alignment: .leading, spacing: 4) {
-                Text("cswap path (empty = detect automatically)")
+                Text("Using: \(store.cswapDescription.isEmpty ? "…" : store.cswapDescription)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Use a different cswap (empty = the one bundled in this app)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("~/.local/bin/cswap", text: $store.cswapPath)
@@ -361,5 +364,6 @@ struct SettingsPanel: View {
                 .keyboardShortcut(.defaultAction)
             }
         }
+        .onAppear { store.describeCswap() }
     }
 }

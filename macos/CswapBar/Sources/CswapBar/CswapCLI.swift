@@ -17,7 +17,7 @@ enum CswapCLI {
         var errorDescription: String? {
             switch self {
             case .notFound:
-                return "cswap was not found. Install it with `uv tool install claude-swap`, or set its path in Settings."
+                return "claude-swap was not found: this app was built without its bundled copy. Rebuild it with build-app.sh, or set the path of an installed cswap in Settings."
             case .timedOut:
                 return "cswap did not answer in time."
             case .command(let message):
@@ -42,16 +42,41 @@ enum CswapCLI {
 
     // MARK: - Locating cswap
 
-    static func locate() -> String? {
+    /// How to invoke cswap: an executable plus leading arguments.
+    struct Invocation {
+        let executable: String
+        let leadingArguments: [String]
+        let isBundled: Bool
+
+        var summary: String {
+            isBundled ? "bundled claude-swap" : executable
+        }
+    }
+
+    /// The Python runtime with claude-swap that build-app.sh puts in the app.
+    static var bundledPython: String? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let python = resources.appendingPathComponent("runtime/bin/python3").path
+        return FileManager.default.isExecutableFile(atPath: python) ? python : nil
+    }
+
+    /// A path set in Settings wins; then the bundled copy; then an installed cswap.
+    static func locate() -> Invocation? {
         let fm = FileManager.default
         if let custom = UserDefaults.standard.string(forKey: pathDefaultsKey),
            !custom.isEmpty {
             let expanded = (custom as NSString).expandingTildeInPath
-            return fm.isExecutableFile(atPath: expanded) ? expanded : nil
+            guard fm.isExecutableFile(atPath: expanded) else { return nil }
+            return Invocation(executable: expanded, leadingArguments: [], isBundled: false)
+        }
+        if let python = bundledPython {
+            return Invocation(executable: python, leadingArguments: ["-m", "claude_swap"], isBundled: true)
         }
         for dir in extraPathDirectories {
             let candidate = dir + "/cswap"
-            if fm.isExecutableFile(atPath: candidate) { return candidate }
+            if fm.isExecutableFile(atPath: candidate) {
+                return Invocation(executable: candidate, leadingArguments: [], isBundled: false)
+            }
         }
         // Last resort: ask the user's login shell, which sees their PATH.
         if let out = try? run(executable: "/bin/zsh",
@@ -59,7 +84,9 @@ enum CswapCLI {
                               timeout: 5) {
             let path = String(decoding: out.stdout, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !path.isEmpty, fm.isExecutableFile(atPath: path) { return path }
+            if !path.isEmpty, fm.isExecutableFile(atPath: path) {
+                return Invocation(executable: path, leadingArguments: [], isBundled: false)
+            }
         }
         return nil
     }
@@ -86,7 +113,22 @@ enum CswapCLI {
 
     private static func runCswap(_ arguments: [String], timeout: TimeInterval) throws -> Output {
         guard let cswap = locate() else { throw Failure.notFound }
-        return try run(executable: cswap, arguments: arguments, timeout: timeout)
+        return try run(
+            executable: cswap.executable,
+            arguments: cswap.leadingArguments + arguments,
+            timeout: timeout,
+            bundledPython: cswap.isBundled
+        )
+    }
+
+    /// `cswap --version` of whichever copy is in use, for the Settings panel.
+    static func version() -> String? {
+        guard let out = try? runCswap(["--version"], timeout: 15), out.status == 0 else {
+            return nil
+        }
+        let text = String(decoding: out.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.split(separator: " ").last.map(String.init)
     }
 
     /// Throws the CLI's own error message on a non-zero exit.
@@ -117,7 +159,12 @@ enum CswapCLI {
         return .command(lastLine ?? "cswap exited with status \(output.status).")
     }
 
-    static func run(executable: String, arguments: [String], timeout: TimeInterval) throws -> Output {
+    static func run(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        bundledPython: Bool = false
+    ) throws -> Output {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -126,6 +173,14 @@ enum CswapCLI {
         let basePath = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         env["PATH"] = (extraPathDirectories + [basePath]).joined(separator: ":")
         env["NO_COLOR"] = "1"
+        if bundledPython {
+            // Keep the bundled runtime isolated from any Python setup of the
+            // user's, and never write bytecode into the signed app bundle.
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONNOUSERSITE"] = "1"
+            env.removeValue(forKey: "PYTHONPATH")
+            env.removeValue(forKey: "PYTHONHOME")
+        }
         process.environment = env
 
         let outPipe = Pipe()

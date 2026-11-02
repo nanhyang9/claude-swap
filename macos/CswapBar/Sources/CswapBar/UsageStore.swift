@@ -33,6 +33,9 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// Which claude-swap the app runs, for the Settings panel.
+    @Published private(set) var cswapDescription: String = ""
+
     private static let showChatGPTKey = "showChatGPT"
     private let refreshInterval: TimeInterval = 60
     private let chatgptInterval: TimeInterval = 300
@@ -130,6 +133,20 @@ final class UsageStore: ObservableObject {
                 }
                 self.refresh()
             }
+        }
+    }
+
+    func describeCswap() {
+        Task.detached(priority: .utility) {
+            let invocation = CswapCLI.locate()
+            let version = invocation == nil ? nil : CswapCLI.version()
+            let text: String
+            if let invocation {
+                text = "\(invocation.summary)" + (version.map { " \($0)" } ?? "")
+            } else {
+                text = "not found"
+            }
+            await MainActor.run { self.cswapDescription = text }
         }
     }
 

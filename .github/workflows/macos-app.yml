@@ -32,7 +32,29 @@ jobs:
         working-directory: macos/CswapBar
         run: |
           plutil -lint "build/Claude Swap Bar.app/Contents/Info.plist"
-          codesign --verify --verbose "build/Claude Swap Bar.app"
+          codesign --verify --deep --strict --verbose=2 "build/Claude Swap Bar.app"
+
+      - name: Bundled claude-swap runs from a moved copy of the app
+        working-directory: macos/CswapBar
+        run: |
+          # Move the app first: the runtime must not depend on the build path.
+          mkdir -p "$RUNNER_TEMP/moved"
+          cp -R "build/Claude Swap Bar.app" "$RUNNER_TEMP/moved/"
+          RES="$RUNNER_TEMP/moved/Claude Swap Bar.app/Contents/Resources"
+          export HOME="$(mktemp -d)" PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
+          PY="$RES/runtime/bin/python3"
+          "$PY" -m claude_swap --version
+          "$RES/bin/cswap" --version
+          # No Codex login on the runner: expect the JSON error envelope, exit 1.
+          set +e
+          "$PY" -m claude_swap chatgpt --json > chatgpt.json
+          code=$?
+          set -e
+          test "$code" -eq 1
+          "$PY" -c "import json; assert 'error' in json.load(open('chatgpt.json'))"
+          # Nothing may be written into the signed bundle at runtime.
+          codesign --verify --deep --strict "$RUNNER_TEMP/moved/Claude Swap Bar.app"
+          du -sh "$RUNNER_TEMP/moved/Claude Swap Bar.app"
 
       - uses: actions/upload-artifact@v4
         with:
