@@ -812,7 +812,7 @@ class TestDashboard:
             await pilot.press("down", "down", "down", "enter")
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
-            assert ids == ["add-login", "add-token", "back"]
+            assert ids == ["add-login", "add-mint-token", "add-token", "back"]
             await pilot.press("escape")
             await pilot.pause()
             ids = [item.action_id for item in menu.query(MenuItem)]
@@ -1055,6 +1055,62 @@ class TestDashboard:
             await pilot.click("#add")
             await settle(pilot)
             assert ("add_token", "sk-ant-oat01-test", None, 5, True) in fake.calls
+
+    async def test_mint_token_prefills_form_then_adds(self, tmp_path, monkeypatch):
+        import contextlib
+
+        import claude_swap.setup_token as st
+
+        minted = []
+        monkeypatch.setattr(
+            st, "mint_setup_token", lambda: minted.append(1) or "sk-ant-oat01-minted"
+        )
+        fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        app = make_app(fake)
+        monkeypatch.setattr(app, "suspend", contextlib.nullcontext)
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            await menu_select(pilot, "add-menu")
+            await menu_select(pilot, "add-mint-token")
+            await pilot.pause()
+            from textual.widgets import Input
+
+            from claude_swap.tui.modals import AddTokenModal
+
+            assert minted == [1]
+            assert isinstance(app.screen, AddTokenModal)
+            assert app.screen.query_one("#token", Input).value == "sk-ant-oat01-minted"
+            app.screen.query_one("#email", Input).value = "me@example.com"
+            await pilot.click("#add")
+            await settle(pilot)
+            assert (
+                "add_token", "sk-ant-oat01-minted", "me@example.com", None, True
+            ) in fake.calls
+
+    async def test_mint_token_failure_notifies_without_form(self, tmp_path, monkeypatch):
+        import contextlib
+
+        import claude_swap.setup_token as st
+
+        def boom():
+            raise st.SetupTokenError("cancelled in browser")
+
+        monkeypatch.setattr(st, "mint_setup_token", boom)
+        fake = FakeSwitcher([make_account(1, active=True)], tmp_path)
+        app = make_app(fake)
+        monkeypatch.setattr(app, "suspend", contextlib.nullcontext)
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda msg, **kw: notes.append(msg))
+        async with app.run_test(size=(100, 40)) as pilot:
+            await settle(pilot)
+            await menu_select(pilot, "add-menu")
+            await menu_select(pilot, "add-mint-token")
+            await pilot.pause()
+            from claude_swap.tui.modals import AddTokenModal
+
+            assert not isinstance(app.screen, AddTokenModal)
+            assert "cancelled in browser" in notes
+            assert not any(call[0] == "add_token" for call in fake.calls)
 
     async def test_add_token_occupied_slot_asks_first(self, tmp_path):
         fake = FakeSwitcher(

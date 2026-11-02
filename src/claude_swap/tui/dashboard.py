@@ -87,7 +87,8 @@ class DashboardScreen(Screen):
     def _add_entries(self) -> MenuEntries:
         return [
             ("From current Claude Code login", "add-login"),
-            ("From a setup-token / API key…", "add-token"),
+            ("Create a new setup-token (claude setup-token)…", "add-mint-token"),
+            ("From an existing setup-token / API key…", "add-token"),
             _BACK,
         ]
 
@@ -163,6 +164,7 @@ class DashboardScreen(Screen):
             "auto": app.action_open_auto,
             "add-login": app.action_add_current,
             "add-token": app.action_add_token,
+            "add-mint-token": app.action_mint_token,
             "quit": app.exit,
         }
         if action_id == "back":

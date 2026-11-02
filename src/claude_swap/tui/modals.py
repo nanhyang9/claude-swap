@@ -79,6 +79,11 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
         Binding("right", "app.focus_next", show=False),
     ]
 
+    def __init__(self, token: str = "") -> None:
+        super().__init__()
+        # Prefilled when the token was just minted with `claude setup-token`.
+        self._prefill = token
+
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-box"):
             yield Label("Add account from token", classes="modal-title")
@@ -87,7 +92,12 @@ class AddTokenModal(ModalScreen["TokenForm | None"]):
                 "(sk-ant-api…, sk-ant-usr…); the type is auto-detected.",
                 classes="modal-body",
             )
-            yield Input(password=True, placeholder="token (required)", id="token")
+            yield Input(
+                value=self._prefill,
+                password=True,
+                placeholder="token (required)",
+                id="token",
+            )
             yield Input(placeholder="email label (optional)", id="email")
             yield Input(placeholder="slot number (optional)", id="slot", type="integer")
             yield Static("", id="form-error", classes="form-error")

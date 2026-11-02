@@ -101,6 +101,9 @@ class MenuBarSettings:
     title_scoped: bool = False  # append per-model weekly limits (e.g. Fable) to the title
     refresh_interval: int = 60
     auto_switch_enabled: bool = False
+    # ChatGPT (Codex) plan usage, read from ~/.codex/auth.json. Only shown when
+    # a Codex login exists; the section stays out of the menu otherwise.
+    show_chatgpt: bool = True
 
     @classmethod
     def load(cls, path: Path) -> "MenuBarSettings":
@@ -127,6 +130,64 @@ class MenuBarSettings:
         """Write settings as pretty JSON, creating parent directories."""
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+
+
+# ChatGPT usage changes slowly and is a separate service: fetch it at most this
+# often, independent of the Claude refresh interval.
+CHATGPT_REFRESH_S = 300
+
+
+def chatgpt_menu_lines(result) -> list[str]:
+    """Menu rows for the ChatGPT section: a header, then one row per window.
+
+    ``result`` is a :class:`~claude_swap.chatgpt_usage.ChatGPTUsage`, an error
+    message string, or ``None`` (no Codex login: the section is hidden).
+    """
+    if result is None:
+        return []
+    if isinstance(result, str):
+        return ["ChatGPT", f"  {result}"]
+    from claude_swap.chatgpt_usage import format_usage_lines
+
+    who = result.email or "ChatGPT"
+    plan = f" [{result.plan}]" if result.plan else ""
+    return [f"ChatGPT · {who}{plan}", *(f"  {line}" for line in format_usage_lines(result))]
+
+
+def fetch_chatgpt_for_menu(home: Path | None = None):
+    """The ChatGPT section's data: usage, a short error string, or None.
+
+    ``None`` (hide the section) only when there is no Codex ``auth.json`` at
+    all, so users who never installed Codex see no change.
+    """
+    from claude_swap.chatgpt_usage import (
+        ChatGPTUsageError,
+        codex_home,
+        get_chatgpt_usage,
+    )
+
+    base = home or codex_home()
+    if not (base / "auth.json").exists():
+        return None
+    try:
+        return get_chatgpt_usage(base)
+    except ChatGPTUsageError as e:
+        text = str(e)
+        return text if len(text) <= 90 else text[:87] + "…"
+
+
+def setup_token_terminal_script(cswap_path: str) -> str:
+    """AppleScript that runs ``cswap setup-token --new`` in a new Terminal window."""
+    import shlex
+
+    command = f"{shlex.quote(cswap_path)} setup-token --new"
+    escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        'tell application "Terminal"\n'
+        "  activate\n"
+        f'  do script "{escaped}"\n'
+        "end tell"
+    )
 
 
 # ---- pure display helpers (operate on the usage-window dict shape produced by
@@ -583,6 +644,8 @@ def run(switcher) -> int:
             self._config_path = switcher._get_claude_config_path()
             self._config_mtime = 0.0
             self._last_usage_log: dict = {}  # account num -> last-logged (5h, 7d) key
+            self._chatgpt = None  # ChatGPTUsage | error str | None (hidden)
+            self._chatgpt_at = 0.0
             # Auto-switch engine (the same one `cswap auto` runs), hosted in a
             # background thread while enabled.
             self._engine = None
@@ -624,9 +687,23 @@ def run(switcher) -> int:
                 self._log_usage(snap)
                 self.snapshot = snap
                 self._snapshot_at = time.time()
+                self._refresh_chatgpt(full)
                 self._dirty = True  # picked up by on_sync_tick on the main thread
             finally:
                 self._refreshing = False
+
+        def _refresh_chatgpt(self, full):
+            if not self.settings.show_chatgpt:
+                self._chatgpt = None
+                return
+            now = time.time()
+            if not full and now - self._chatgpt_at < CHATGPT_REFRESH_S:
+                return
+            self._chatgpt_at = now
+            try:
+                self._chatgpt = fetch_chatgpt_for_menu()
+            except Exception:
+                self.switcher._logger.debug("chatgpt usage failed", exc_info=True)
 
         def _log_usage(self, snap):
             """Log each account's session/weekly limits when they change.
@@ -783,8 +860,18 @@ def run(switcher) -> int:
             if not account_items:
                 account_items.append(rumps.MenuItem("No managed accounts", callback=None))
 
+            chatgpt_items = [
+                rumps.MenuItem(line, callback=None)
+                for line in chatgpt_menu_lines(
+                    self._chatgpt if self.settings.show_chatgpt else None
+                )
+            ]
+            if chatgpt_items:
+                chatgpt_items.insert(0, None)
+
             self.menu = [
                 *account_items,
+                *chatgpt_items,
                 None,
                 rumps.MenuItem("Rotate to next", callback=self._switch(None)),
                 rumps.MenuItem("Switch to best", callback=self._switch("best")),
@@ -805,7 +892,10 @@ def run(switcher) -> int:
             menu = rumps.MenuItem("Add account")
             menu.add(rumps.MenuItem("From current login", callback=self.on_add_login))
             if hasattr(self.switcher, "add_account_from_token"):
-                menu.add(rumps.MenuItem("From setup-token…", callback=self.on_add_token))
+                menu.add(rumps.MenuItem(
+                    "New setup-token (opens Terminal)…", callback=self.on_mint_token
+                ))
+                menu.add(rumps.MenuItem("From existing setup-token…", callback=self.on_add_token))
             return menu
 
         def _remove_menu(self, rumps):
@@ -870,6 +960,12 @@ def run(switcher) -> int:
             )
             scoped_item.state = 1 if self.settings.title_scoped else 0
             menu.add(scoped_item)
+
+            chatgpt_item = rumps.MenuItem(
+                "Show ChatGPT (Codex) usage", callback=self.on_toggle_chatgpt
+            )
+            chatgpt_item.state = 1 if self.settings.show_chatgpt else 0
+            menu.add(chatgpt_item)
 
             interval = rumps.MenuItem("Refresh interval")
             labels = {30: "30 seconds", 60: "60 seconds", 300: "5 minutes"}
@@ -981,6 +1077,20 @@ def run(switcher) -> int:
             )):
                 self.refresh_async()
 
+        def on_mint_token(self, _sender):
+            # `claude setup-token` is an interactive terminal program (browser
+            # sign-in, then a pasted code), so it can't run inside the menu
+            # bar process: hand it to Terminal, where `cswap setup-token --new`
+            # captures the token and stores the account. The next refresh
+            # picks the new account up.
+            import shutil
+            import subprocess
+
+            cswap = shutil.which("cswap") or sys.argv[0]
+            subprocess.run(
+                ["osascript", "-e", setup_token_terminal_script(cswap)], check=False
+            )
+
         def on_open_log(self, _sender):
             import subprocess
             # Reveal the log in Finder (-R); if it doesn't exist yet, open the dir.
@@ -1024,6 +1134,13 @@ def run(switcher) -> int:
         def on_toggle_scoped(self, _sender):
             self.settings.title_scoped = not self.settings.title_scoped
             self._save_and_rebuild()
+
+        def on_toggle_chatgpt(self, _sender):
+            self.settings.show_chatgpt = not self.settings.show_chatgpt
+            self._chatgpt_at = 0.0  # fetch on the next refresh when turned on
+            self._save_and_rebuild()
+            if self.settings.show_chatgpt:
+                self.refresh_async(full=True)
 
         def _make_title_pct(self, mode):
             def cb(_sender):

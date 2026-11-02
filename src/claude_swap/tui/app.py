@@ -12,12 +12,13 @@ import time
 from dataclasses import replace
 from functools import partial
 
-from textual.app import App
+from textual.app import App, SuspendNotSupported
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual.worker import WorkerState
 
 from claude_swap import printer
+from claude_swap.exceptions import ClaudeSwitchError
 from claude_swap.models import AccountsSnapshot
 from claude_swap.snapshot_source import account_identity
 from claude_swap.settings import load_settings, load_ui_settings, set_setting
@@ -354,6 +355,36 @@ class CswapApp(App):
 
     def action_add_token(self) -> None:
         self.push_screen(AddTokenModal(), self._on_token_form)
+
+    def action_mint_token(self) -> None:
+        """Run `claude setup-token` in the real terminal, then prefill the form.
+
+        The dashboard is suspended while the command owns the terminal; the
+        captured token lands in the add-token form, where an email label and a
+        slot can still be set before adding.
+        """
+        from claude_swap.setup_token import mint_setup_token
+
+        try:
+            with self.suspend():
+                try:
+                    token = mint_setup_token()
+                except ClaudeSwitchError as exc:
+                    error_text = str(exc)
+                    token = None
+                else:
+                    error_text = None
+        except SuspendNotSupported:
+            self.notify(
+                "This terminal can't hand over control; run "
+                "`cswap setup-token --new` instead.",
+                severity="warning",
+            )
+            return
+        if token is None:
+            self.notify(error_text or "No token was created.", severity="error")
+            return
+        self.push_screen(AddTokenModal(token=token), self._on_token_form)
 
     def _on_token_form(self, form: TokenForm | None) -> None:
         if form is None:

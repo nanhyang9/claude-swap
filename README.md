@@ -209,6 +209,8 @@ cswap alias                     # List all aliases
 cswap move 2 1                  # Assign an account to a slot (relocates to an empty slot, swaps if taken)
 cswap unclaimed                 # List stashed credential entries (slot + why they were stashed)
 cswap unclaimed --purge ID      # Drop one (deletes its bytes; recover with /login + `cswap add`)
+cswap setup-token               # Add an account via `claude setup-token` (new or existing token)
+cswap chatgpt                   # Show ChatGPT (Codex) plan usage
 cswap tui                       # Interactive dashboard (also: bare `cswap`)
 cswap watch                     # Dashboard, opened on the live watch page
 cswap upgrade                   # Upgrade claude-swap to the latest version
@@ -368,6 +370,56 @@ Weekly windows (`sevenDay` and per-model `scoped` entries — never `fiveHour`) 
 </details>
 
 `cswap auto --json` emits an event *stream* instead — one JSON object per line (`{"schemaVersion":1,"event":"switch","ts":…, …}` with kinds like `poll`, `switch`, `no-switch`, `account-quarantined`, `all-exhausted`, `error`). The contract is additive: new kinds and fields may appear, so scripts should ignore unknown ones.
+
+### Add an account with `claude setup-token`
+
+`cswap setup-token` adds an account from a long-lived (1-year) OAuth token —
+either one created right now, or one you issued earlier:
+
+```bash
+cswap setup-token                         # asks: create a new token, or use an existing one
+cswap setup-token --new --alias work      # run `claude setup-token` now
+cswap setup-token --existing              # paste a token you already have (hidden input)
+cswap setup-token sk-ant-oat01-...        # use this token
+echo "$TOKEN" | cswap setup-token -       # read it from stdin
+```
+
+With `--new`, cswap runs `claude setup-token` in your terminal (sign in in the
+browser and paste the code as usual) and picks the printed token up from its
+output, so nothing has to be copied by hand; the token is never written to the
+log. If the token can't be read from the output (or on Windows), you are asked
+to paste it — a token that the terminal wrapped over several lines can be pasted
+as-is, finish with an empty line. Setup-tokens carry no email, so you are asked
+for an optional label (`--email`); without one the account is
+`setup-token-{slot}@token.local`. Both the TUI (*Add account… → Create a new
+setup-token*) and the macOS menu bar (*Add account → New setup-token*, which
+opens Terminal) offer the same flow.
+
+Setup-tokens are inference-only (`user:inference` scope) and do not refresh;
+when one expires, create a new one and add it again with the same `--email`.
+
+### ChatGPT (Codex) usage
+
+If you also use the Codex CLI with *Sign in with ChatGPT*, cswap can show that
+plan's usage — the same 5-hour and weekly Codex limits `/status` shows in Codex:
+
+```bash
+cswap chatgpt            # or: cswap codex
+cswap chatgpt --json
+```
+
+```
+ChatGPT you@example.com [plus]
+  5h:  23%   resets 20:39         in 2h 14m
+  7d:  61%   resets Nov 7 08:59   in 4d 10h
+```
+
+It reads Codex's login from `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`)
+and calls the usage endpoint the Codex CLI itself uses. The token is only read,
+never refreshed — if it has expired, run `codex` once and retry. ChatGPT's own
+chat message limits are not exposed by OpenAI and are not shown. The macOS menu
+bar lists the same numbers under the accounts once a Codex login exists
+(*Settings → Show ChatGPT (Codex) usage* turns it off).
 
 ### Add an account from a raw token or API key
 

@@ -3973,7 +3973,7 @@ class ClaudeAccountSwitcher:
         email: str | None = None,
         slot: int | None = None,
         assume_yes: bool = False,
-    ) -> None:
+    ) -> str | None:
         """Register a raw OAuth setup-token or managed API key as a new account.
 
         Useful for headless servers or when the token is received from another
@@ -3994,6 +3994,10 @@ class ClaudeAccountSwitcher:
             slot:  Slot number to use; auto-assigned when ``None``.
             assume_yes: Skip the occupied-slot overwrite prompt (callers with
                    their own confirmation UI, e.g. the TUI, confirm first).
+
+        Returns:
+            The account number the token was stored under, or ``None`` when
+            the user cancelled the overwrite prompt.
         """
         self._refuse_session_shell()
         import getpass
@@ -4076,7 +4080,7 @@ class ClaudeAccountSwitcher:
                 f"{accent(f'Updated {kind_label}')} for Account {account_num} "
                 f"({email} {muted('[personal]')})."
             )
-            return
+            return account_num
 
         displace_slot = None
         migrate_from = None
@@ -4176,6 +4180,7 @@ class ClaudeAccountSwitcher:
             f"{accent('Added')} Account {account_num}: {email} "
             f"{muted('[personal]')} {muted(f'(from {source_label})')}"
         )
+        return account_num
 
     def remove_account(self, identifier: str, assume_yes: bool = False) -> None:
         """Remove account from managed accounts.

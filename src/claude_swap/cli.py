@@ -607,6 +607,182 @@ Examples:
         sys.exit(130)
 
 
+def _choose_token_source() -> str:
+    """Ask whether to mint a new setup-token or use one the user already has."""
+    print(bolded("Add an account with a long-lived token (claude setup-token)"))
+    print("  1) Create a new token now (runs `claude setup-token`, opens a browser)")
+    print("  2) Use a token I already have (sk-ant-oat…, or an API key)")
+    while True:
+        try:
+            answer = input("Choose [1/2] (default 1): ").strip()
+        except EOFError:
+            answer = "q"
+        if answer in ("", "1"):
+            return "new"
+        if answer == "2":
+            return "existing"
+        if answer.lower() in ("q", "quit"):
+            raise KeyboardInterrupt
+        print(dimmed("Please answer 1 or 2."))
+
+
+def _setup_token_command(argv: list[str]) -> None:
+    """Handle `cswap setup-token [TOKEN|-] [--new|--existing] [--email] [--slot] [--alias]`.
+
+    Adds an account from a long-lived OAuth token: either one minted right
+    now by running `claude setup-token` (its output is captured, so nothing
+    has to be copied), or one issued earlier and passed in / pasted.
+    """
+    parser = argparse.ArgumentParser(
+        prog=f"{_prog_name()} setup-token",
+        description=(
+            "Add an account from a long-lived OAuth token. Create a new one with "
+            "`claude setup-token` (run for you, the token is picked up "
+            "automatically), or reuse one you already issued."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  cswap setup-token                       # asks: create new, or use existing
+  cswap setup-token --new --alias work    # run `claude setup-token` now
+  cswap setup-token --existing            # paste an existing token (hidden)
+  cswap setup-token sk-ant-oat01-...      # use this token
+  echo "$TOKEN" | cswap setup-token -     # read the token from stdin
+        """,
+    )
+    parser.add_argument(
+        "token",
+        nargs="?",
+        metavar="TOKEN|-",
+        help="An existing token, or '-' to read it from stdin",
+    )
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--new",
+        action="store_true",
+        help="Create a new token by running `claude setup-token`",
+    )
+    source.add_argument(
+        "--existing",
+        action="store_true",
+        help="Paste a token you already have at a hidden prompt",
+    )
+    parser.add_argument(
+        "--email",
+        metavar="EMAIL",
+        help=(
+            "Label the account with this email (setup-tokens carry no email; "
+            "default setup-token-{slot}@token.local)"
+        ),
+    )
+    parser.add_argument("--slot", type=int, metavar="NUM", help="Slot number to use")
+    parser.add_argument("--alias", metavar="NAME", help="Short alias for the account")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args(argv)
+
+    if args.token is not None and (args.new or args.existing):
+        parser.error("TOKEN cannot be combined with --new or --existing")
+
+    from claude_swap.setup_token import mint_setup_token, prompt_for_token
+
+    try:
+        switcher = ClaudeAccountSwitcher(debug=args.debug)
+        _guard_root(switcher)
+
+        interactive = sys.stdin.isatty()
+        if args.token is not None:
+            mode = "given"
+        elif args.new:
+            mode = "new"
+        elif args.existing:
+            mode = "existing"
+        elif interactive:
+            mode = _choose_token_source()
+        else:
+            parser.error(
+                "no token given: pass TOKEN, '-' to read stdin, or run in a terminal"
+            )
+
+        if mode == "new":
+            token = mint_setup_token()
+            print()
+            print(f"{accent('Token captured')} from `claude setup-token`.")
+        elif mode == "existing":
+            token = prompt_for_token(
+                what="your existing token (sk-ant-oat…, or an API key)"
+            )
+        else:
+            token = args.token
+
+        email = args.email
+        if email is None and interactive and mode != "given":
+            try:
+                email = input(
+                    "Email label for this account (optional, Enter to skip): "
+                ).strip() or None
+            except EOFError:
+                email = None
+
+        account_num = switcher.add_account_from_token(
+            token=token, email=email, slot=args.slot
+        )
+        if account_num and args.alias:
+            _, normalized = switcher.set_alias(account_num, args.alias)
+            print(f"{accent('Set alias')} '{normalized}' for Account {account_num}")
+    except ClaudeSwitchError as e:
+        error(f"Error: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print(f"\n{dimmed('Operation cancelled')}")
+        sys.exit(130)
+
+
+def _chatgpt_command(argv: list[str]) -> None:
+    """Handle `cswap chatgpt [--json]`: show the ChatGPT plan's Codex usage."""
+    parser = argparse.ArgumentParser(
+        prog=f"{_prog_name()} chatgpt",
+        description=(
+            "Show ChatGPT plan usage (the Codex 5-hour and weekly limits) for "
+            "the account the Codex CLI is signed in with. Reads "
+            "$CODEX_HOME/auth.json (default ~/.codex/auth.json); sign in with "
+            "`codex login` first. The token is only read, never refreshed."
+        ),
+    )
+    parser.add_argument("--json", action="store_true", help="Emit JSON")
+    parser.add_argument(
+        "--codex-home",
+        metavar="DIR",
+        help="Codex home directory (default: $CODEX_HOME or ~/.codex)",
+    )
+    args = parser.parse_args(argv)
+
+    from pathlib import Path
+
+    from claude_swap.chatgpt_usage import format_usage_lines, get_chatgpt_usage
+
+    home = Path(args.codex_home).expanduser() if args.codex_home else None
+    try:
+        usage = get_chatgpt_usage(home)
+    except ClaudeSwitchError as e:
+        if args.json:
+            print(json.dumps(error_envelope(e), indent=2))
+        else:
+            error(f"Error: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print(f"\n{dimmed('Operation cancelled')}", file=sys.stderr)
+        sys.exit(130)
+
+    if args.json:
+        print(json.dumps(usage.to_json(), indent=2))
+        return
+    who = usage.email or "ChatGPT account"
+    plan = f" {muted(f'[{usage.plan}]')}" if usage.plan else ""
+    print(f"{bolded('ChatGPT')} {who}{plan}")
+    for line in format_usage_lines(usage):
+        print(f"  {line}")
+
+
 def _threshold_command(argv: list[str]) -> None:
     """Handle `cswap threshold [NUM|EMAIL|ALIAS] [PCT] [--unset]`.
 
@@ -1226,6 +1402,12 @@ def main() -> None:
     if argv and argv[0] == "move":
         _move_command(argv[1:])
         return
+    if argv and argv[0] == "setup-token":
+        _setup_token_command(argv[1:])
+        return
+    if argv and argv[0] in ("chatgpt", "codex"):
+        _chatgpt_command(argv[1:])
+        return
 
     # Bare `cswap` in an interactive terminal opens the TUI dashboard (like
     # lazygit/k9s). TTY-gated on both ends so scripts and pipes keep getting
@@ -1251,6 +1433,8 @@ Commands:
   %(prog)s switch <num|email>         switch to a specific account
   %(prog)s add                        add the current account
   %(prog)s add-token [TOKEN|-]        register a setup-token or API key
+  %(prog)s setup-token [--new]        add via `claude setup-token` (new or existing)
+  %(prog)s chatgpt                    show ChatGPT (Codex) plan usage
   %(prog)s remove <num|email>         remove an account
   %(prog)s disable <num|email>        hold an account out of auto-rotation
   %(prog)s enable <num|email>         return a disabled account to rotation
