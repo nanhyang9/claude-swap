@@ -281,7 +281,8 @@ The agent lives at `~/Library/LaunchAgents/com.cswap.menubar.plist` and logs to 
 panel with every account's usage bars, reset countdowns, the ChatGPT (Codex)
 usage, and one-click switching. It is self-contained — the build bundles a
 Python runtime with claude-swap inside the app, so nothing else needs to be
-installed. Build it with Xcode's command line tools:
+installed. Download the DMG that CI builds (Apple Silicon; see the app's
+README), or build it with Xcode's command line tools:
 
 ```bash
 cd macos/CswapBar && ./build-app.sh --install

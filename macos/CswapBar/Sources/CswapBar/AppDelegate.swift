@@ -2,17 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-@main
-struct CswapBarApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-
-    // The menu bar item and its panel are AppKit (see AppDelegate); SwiftUI
-    // needs a scene, and an empty Settings scene opens no window.
-    var body: some Scene {
-        Settings { EmptyView() }
-    }
-}
-
 /// Owns the menu bar item and the panel.
 ///
 /// An `NSPopover` rather than SwiftUI's `MenuBarExtra` window: the popover
@@ -26,10 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var storeObserver: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // The bundled app sets LSUIElement; this also keeps `swift run`
-        // (no bundle) out of the Dock.
-        NSApplication.shared.setActivationPolicy(.accessory)
-
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
             button.target = self
@@ -52,20 +37,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The menu bar shows the active account's 5h · 7d percentages.
+    /// The menu bar shows only the active account's 5h · 7d percentages
+    /// (no icon), or "Claude" until the first reading arrives.
     private func updateStatusButton() {
         guard let button = statusItem?.button else { return }
-        let image = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "Claude Swap")
-        image?.isTemplate = true
-        button.image = image
-        if let text = store.menuBarText {
-            button.title = " " + text
-        } else {
-            button.title = ""
-        }
+        button.image = nil
+        button.title = store.menuBarText ?? "Claude"
+        button.toolTip = "Claude Swap"
     }
 
-    @objc private func togglePopover(_ sender: Any?) {
+    /// Opening the app again (Finder, Spotlight) shows the panel.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !popover.isShown { togglePopover(nil) }
+        return false
+    }
+
+    /// A menu bar app has no visible main menu, but text fields still need
+    /// its Edit items for Cmd-C / Cmd-V / Cmd-A to work.
+    static func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+        let editItem = NSMenuItem()
+        main.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        return main
+    }
+
+    @objc func togglePopover(_ sender: Any?) {
         if popover.isShown {
             popover.performClose(sender)
             return

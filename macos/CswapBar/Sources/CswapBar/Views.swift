@@ -342,10 +342,12 @@ struct AccountCard: View {
                 .controlSize(.small)
                 .help("Remove this account from Claude Swap")
                 .disabled(actionsDisabled)
-                Button("Sign in again…", action: onRenew)
-                    .controlSize(.small)
-                    .help("Sign in to this account again (for example when its login expired)")
-                    .disabled(actionsDisabled)
+                Button(action: onRenew) {
+                    Image(systemName: "person.badge.key")
+                }
+                .controlSize(.small)
+                .help("Sign in again (for example when this account's login expired)")
+                .disabled(actionsDisabled)
                 if !account.active {
                     Button("Switch", action: onSwitch)
                         .controlSize(.small)
@@ -511,9 +513,6 @@ struct ChatGPTCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
                 Text(verbatim: "ChatGPT")
                     .font(.system(size: 13, weight: .semibold))
                 if let plan = usage?.plan {

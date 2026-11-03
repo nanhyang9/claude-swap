@@ -1,15 +1,21 @@
 name: macOS app
 
-# Builds the native menu bar app (macos/CswapBar). Swift/SwiftUI only build on
-# macOS, so this is the only place the app is compiled in CI.
+# Builds the native menu bar app (macos/CswapBar) with claude-swap bundled
+# inside, packages it as a DMG and keeps the DMG as a build artifact, so it
+# can be downloaded without building. Swift/SwiftUI only build on macOS, so
+# this is the only place the app is compiled in CI.
 on:
   push:
     paths:
       - 'macos/**'
+      - 'src/**'
+      - 'pyproject.toml'
       - '.github/workflows/macos-app.yml'
   pull_request:
     paths:
       - 'macos/**'
+      - 'src/**'
+      - 'pyproject.toml'
       - '.github/workflows/macos-app.yml'
   workflow_dispatch:
 
@@ -34,29 +40,35 @@ jobs:
           plutil -lint "build/Claude Swap Bar.app/Contents/Info.plist"
           codesign --verify --deep --strict --verbose=2 "build/Claude Swap Bar.app"
 
-      - name: Bundled claude-swap runs from a moved copy of the app
+      - name: Package the DMG
+        working-directory: macos/CswapBar
+        run: ./make-dmg.sh
+
+      - name: Bundled claude-swap runs from the mounted DMG
         working-directory: macos/CswapBar
         run: |
-          # Move the app first: the runtime must not depend on the build path.
-          mkdir -p "$RUNNER_TEMP/moved"
-          cp -R "build/Claude Swap Bar.app" "$RUNNER_TEMP/moved/"
-          RES="$RUNNER_TEMP/moved/Claude Swap Bar.app/Contents/Resources"
+          DMG="$(ls build/Claude-Swap-Bar-*.dmg)"
+          hdiutil verify "$DMG"
+          MNT="$(mktemp -d)"
+          hdiutil attach "$DMG" -mountpoint "$MNT" -nobrowse -readonly
+          APP="$MNT/Claude Swap Bar.app"
+          test -L "$MNT/Applications"
+          codesign --verify --deep --strict "$APP"
           export HOME="$(mktemp -d)" PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
-          PY="$RES/runtime/bin/python3"
-          "$PY" -m claude_swap --version
-          "$RES/bin/cswap" --version
+          "$APP/Contents/Resources/runtime/bin/python3" -m claude_swap --version
+          "$APP/Contents/Resources/bin/cswap" --version
           # No Codex login on the runner: expect the JSON error envelope, exit 1.
           set +e
-          "$PY" -m claude_swap chatgpt --json > chatgpt.json
+          "$APP/Contents/Resources/runtime/bin/python3" -m claude_swap chatgpt --json > "$RUNNER_TEMP/chatgpt.json"
           code=$?
           set -e
           test "$code" -eq 1
-          "$PY" -c "import json; assert 'error' in json.load(open('chatgpt.json'))"
-          # Nothing may be written into the signed bundle at runtime.
-          codesign --verify --deep --strict "$RUNNER_TEMP/moved/Claude Swap Bar.app"
-          du -sh "$RUNNER_TEMP/moved/Claude Swap Bar.app"
+          python3 -c "import json,sys; assert 'error' in json.load(open(sys.argv[1]))" "$RUNNER_TEMP/chatgpt.json"
+          hdiutil detach "$MNT"
+          du -h "$DMG"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: claude-swap-bar-app
-          path: macos/CswapBar/build/
+          name: claude-swap-bar-dmg
+          path: macos/CswapBar/build/Claude-Swap-Bar-*.dmg
+          if-no-files-found: error

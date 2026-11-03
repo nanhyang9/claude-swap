@@ -13,14 +13,42 @@ pinned and checksum-verified) with claude-swap from this checkout inside the
 nothing is reimplemented and **claude-swap does not need to be installed
 separately**. Claude Code itself is still needed (it is what you log in with).
 
-## Requirements
+## Install from the DMG (no build needed)
+
+Every push that touches the app (or the bundled claude-swap) builds a disk
+image in GitHub Actions (Apple Silicon, macOS 13 or later):
+
+1. Open the repository's **Actions** tab → workflow **macOS app** → the
+   latest successful run, and download the **claude-swap-bar-dmg** artifact
+   (a zip with `Claude-Swap-Bar-arm64.dmg`; you need to be signed in to
+   GitHub).
+2. Open the DMG and drag **Claude Swap Bar** onto **Applications**.
+3. The app is ad-hoc signed, not notarized by Apple, so macOS blocks the
+   first launch of a downloaded copy. Clear the download mark once:
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Claude Swap Bar.app"
+   ```
+
+   (or open it, then System Settings → Privacy & Security → *Open Anyway*).
+4. Open Claude Swap Bar; its percentages appear in the menu bar.
+
+To update, quit the running app and repeat. Opening the app while it runs
+shows its panel. To package a DMG locally after building:
+`./make-dmg.sh` (writes `build/Claude-Swap-Bar-<arch>.dmg`).
+
+Intel Macs: build it yourself as below.
+
+## Building it yourself
+
+### Requirements
 
 - macOS 13 (Ventura) or later
 - Xcode or the Xcode Command Line Tools (`xcode-select --install`) to build
 - Internet access while building (downloads the ~25 MB Python runtime once,
   then installs claude-swap's dependencies from PyPI)
 
-## Build and install
+### Build and install
 
 ```bash
 cd macos/CswapBar
