@@ -648,6 +648,7 @@ Examples:
   cswap setup-token --existing            # paste an existing token (hidden)
   cswap setup-token sk-ant-oat01-...      # use this token
   echo "$TOKEN" | cswap setup-token -     # read the token from stdin
+  cswap setup-token --new --replace 3     # renew token account 3 in place
         """,
     )
     parser.add_argument(
@@ -677,11 +678,23 @@ Examples:
     )
     parser.add_argument("--slot", type=int, metavar="NUM", help="Slot number to use")
     parser.add_argument("--alias", metavar="NAME", help="Short alias for the account")
+    parser.add_argument(
+        "--replace",
+        metavar="NUM|EMAIL",
+        help=(
+            "Renew this existing token account in place (same slot, alias and "
+            "settings) instead of adding an account"
+        ),
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args(argv)
 
     if args.token is not None and (args.new or args.existing):
         parser.error("TOKEN cannot be combined with --new or --existing")
+    if args.replace is not None and (
+        args.email is not None or args.slot is not None or args.alias is not None
+    ):
+        parser.error("--replace keeps the account's own label and slot; drop --email/--slot/--alias")
 
     from claude_swap.setup_token import mint_setup_token, prompt_for_token
 
@@ -713,6 +726,10 @@ Examples:
             )
         else:
             token = args.token
+
+        if args.replace is not None:
+            switcher.replace_account_token(args.replace, token)
+            return
 
         email = args.email
         if email is None and interactive and mode != "given":
@@ -1555,6 +1572,12 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         help="Set a short display alias for the account (use with 'add')",
     )
     parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip the confirmation prompt (use with 'remove')",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help=(
@@ -1756,6 +1779,9 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     if args.alias is not None and not args.add_account:
         parser.error("--alias can only be used with 'add'")
 
+    if args.yes and not args.remove_account:
+        parser.error("--yes can only be used with 'remove'")
+
     if args.force and not (args.import_ or args.switch_to):
         parser.error("--force can only be used with 'import' or 'switch <num|email>'")
 
@@ -1812,7 +1838,7 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
                 slot=args.slot,
             )
         elif args.remove_account:
-            switcher.remove_account(args.remove_account)
+            switcher.remove_account(args.remove_account, assume_yes=args.yes)
         elif args.disable_account is not None:
             switcher.set_account_disabled(args.disable_account, True)
         elif args.enable_account is not None:

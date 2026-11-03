@@ -237,3 +237,152 @@ def test_add_account_from_token_returns_slot(temp_home):
     assert switcher.add_account_from_token(TOKEN, email="me@example.com") == "1"
     # Re-adding the same identity refreshes in place and reports the same slot.
     assert switcher.add_account_from_token(TOKEN, email="me@example.com") == "1"
+
+
+# ---------------------------------------------------------------- renew in place
+
+import json as _json
+
+from claude_swap.credentials import credential_kind
+
+TOKEN2 = "sk-ant-oat01-" + "Zz9_yY-x8" * 10 + "QrsAA"
+API_KEY = "sk-ant-api03-" + "k" * 80
+
+
+def _login_creds(token="sk-ant-oat01-login", refresh="sk-ant-ort01-refresh"):
+    return _json.dumps({"claudeAiOauth": {"accessToken": token, "refreshToken": refresh,
+                                          "expiresAt": 9_999_999_999_000}})
+
+
+def test_credential_kind():
+    assert credential_kind(_login_creds()) == "login"
+    assert credential_kind(_json.dumps({"claudeAiOauth": {"accessToken": TOKEN}})) == "setup_token"
+    assert credential_kind(API_KEY) == "api_key"
+    assert credential_kind("") is None
+    assert credential_kind("{not json") is None
+    assert credential_kind(_json.dumps({"claudeAiOauth": {}})) is None
+
+
+def _switcher_with_org_account(temp_home):
+    """A setup-token account in slot 1, then given an organization like a login has."""
+    from claude_swap.switcher import ClaudeAccountSwitcher
+
+    sw = ClaudeAccountSwitcher()
+    sw.add_account_from_token(TOKEN, email="me@example.com")
+    data = sw._get_sequence_data()
+    data["accounts"]["1"]["organizationUuid"] = "org-123"
+    data["accounts"]["1"]["organizationName"] = "My Org"
+    sw._write_json(sw.sequence_file, data)
+    sw.set_alias("1", "work")
+    return sw
+
+
+def test_email_match_misses_org_account_and_duplicates(temp_home):
+    """The bug renewing hit: matching by email adds a second account."""
+    sw = _switcher_with_org_account(temp_home)
+    assert sw.add_account_from_token(TOKEN2, email="me@example.com") == "2"
+    assert sorted(sw._get_sequence_data()["accounts"]) == ["1", "2"]
+
+
+def test_replace_renews_the_same_slot(temp_home, capsys):
+    sw = _switcher_with_org_account(temp_home)
+    assert sw.replace_account_token("1", TOKEN2) == "1"
+    data = sw._get_sequence_data()
+    assert sorted(data["accounts"]) == ["1"]
+    record = data["accounts"]["1"]
+    assert record["organizationUuid"] == "org-123"
+    assert record.get("alias") == "work"
+    stored = _json.loads(sw._read_account_credentials("1", "me@example.com"))
+    assert stored["claudeAiOauth"]["accessToken"] == TOKEN2
+    assert "Replaced token for Account 1" in capsys.readouterr().out
+
+
+def test_replace_by_alias_and_stdin(temp_home, monkeypatch):
+    import io
+
+    sw = _switcher_with_org_account(temp_home)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(TOKEN2 + "\n"))
+    assert sw.replace_account_token("work", "-") == "1"
+
+
+def test_replace_refuses_a_login_account(temp_home):
+    from claude_swap.exceptions import ValidationError
+
+    sw = _switcher_with_org_account(temp_home)
+    sw._write_account_credentials("1", "me@example.com", _login_creds())
+    with pytest.raises(ValidationError, match="Claude Code login"):
+        sw.replace_account_token("1", TOKEN2)
+    # and nothing was written
+    assert credential_kind(sw._read_account_credentials("1", "me@example.com")) == "login"
+
+
+def test_replace_refuses_kind_changes(temp_home):
+    from claude_swap.exceptions import ValidationError
+    from claude_swap.switcher import ClaudeAccountSwitcher
+
+    sw = _switcher_with_org_account(temp_home)
+    with pytest.raises(ValidationError, match="API key cannot"):
+        sw.replace_account_token("1", API_KEY)
+
+    sw2 = ClaudeAccountSwitcher()
+    num = sw2.add_account_from_token(API_KEY, email="key@example.com")
+    with pytest.raises(ValidationError, match="only another API key"):
+        sw2.replace_account_token(num, TOKEN2)
+    assert sw2.replace_account_token(num, "sk-ant-api03-" + "n" * 80) == num
+    assert sw2._read_account_credentials(num, "key@example.com").endswith("n" * 10)
+
+
+def test_replace_unknown_account(temp_home):
+    from claude_swap.exceptions import ClaudeSwitchError
+
+    sw = _switcher_with_org_account(temp_home)
+    with pytest.raises(ClaudeSwitchError):
+        sw.replace_account_token("9", TOKEN2)
+
+
+def test_list_json_reports_credential_kind(temp_home):
+    sw = _switcher_with_org_account(temp_home)
+    sw.add_account_from_token(API_KEY, email="key@example.com")
+    sw._write_account_credentials("1", "me@example.com", _login_creds())
+    payload = sw.list_accounts(json_output=True, fetch=set())
+    kinds = {row["number"]: row.get("credentialKind") for row in payload["accounts"]}
+    assert kinds == {1: "login", 2: "api_key"}
+
+
+def test_cli_setup_token_replace_dispatch(no_root_guard, monkeypatch):
+    from claude_swap.switcher import ClaudeAccountSwitcher
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    with patch.object(sys, "argv", ["cswap", "setup-token", "-", "--replace", "3"]), \
+            patch.object(ClaudeAccountSwitcher, "replace_account_token", return_value="3") as rep, \
+            patch.object(ClaudeAccountSwitcher, "add_account_from_token") as add:
+        cli.main()
+    rep.assert_called_once_with("3", "-")
+    add.assert_not_called()
+
+
+def test_cli_setup_token_replace_rejects_label_flags(monkeypatch, capsys):
+    with patch.object(sys, "argv", ["cswap", "setup-token", "-", "--replace", "3", "--email", "a@b.co"]):
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+    assert exc.value.code == 2
+    assert "--replace" in capsys.readouterr().err
+
+
+def test_cli_remove_yes_skips_prompt(no_root_guard, monkeypatch):
+    from claude_swap.switcher import ClaudeAccountSwitcher
+
+    monkeypatch.setattr(cli, "ClaudeAccountSwitcher", ClaudeAccountSwitcher)
+    monkeypatch.setattr(ClaudeAccountSwitcher, "_is_running_in_container", lambda self: True)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000, raising=False)
+    with patch.object(sys, "argv", ["cswap", "remove", "3", "--yes"]), \
+            patch.object(ClaudeAccountSwitcher, "remove_account") as rm:
+        cli.main()
+    rm.assert_called_once_with("3", assume_yes=True)
+
+
+def test_cli_yes_only_with_remove(capsys):
+    with patch.object(sys, "argv", ["cswap", "list", "--yes"]):
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+    assert exc.value.code == 2

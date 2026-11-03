@@ -129,12 +129,29 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// Add (or, for an existing email, replace) an account from a token.
+    /// Add a new account from a token.
     func addToken(_ token: String, email: String?, alias: String?,
                   completion: @escaping (Bool) -> Void) {
         let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        perform("Adding the token…", success: "Account saved.", completion: completion) {
+        perform("Adding the account…", success: "Account added.", completion: completion) {
             try CswapCLI.addToken(value, email: email, alias: alias)
+        }
+    }
+
+    /// Renew an existing token account in place (same slot).
+    func replaceToken(_ token: String, account number: Int, name: String,
+                      completion: @escaping (Bool) -> Void) {
+        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        perform("Replacing the token…", success: "Token replaced for \(name).",
+                completion: completion) {
+            try CswapCLI.replaceToken(value, account: number)
+        }
+    }
+
+    func removeAccount(_ account: Account) {
+        perform("Removing \(account.displayName)…",
+                success: "Removed \(account.displayName).") {
+            try CswapCLI.removeAccount(account.number)
         }
     }
 
@@ -147,11 +164,15 @@ final class UsageStore: ObservableObject {
 
     /// `claude setup-token` needs a terminal (browser sign-in, pasted code),
     /// so it runs in Terminal; the new account shows up on the next refresh.
-    func createTokenInTerminal(email: String?, alias: String?) {
+    func createTokenInTerminal(email: String?, alias: String?, replacing number: Int? = nil) {
         clearMessages()
         var args = ["setup-token", "--new"]
-        if let email { args += ["--email", email] }
-        if let alias { args += ["--alias", alias] }
+        if let number {
+            args += ["--replace", String(number)]
+        } else {
+            if let email { args += ["--email", email] }
+            if let alias { args += ["--alias", alias] }
+        }
         do {
             try CswapCLI.openInTerminal(args)
             noticeMessage = "Finish in the Terminal window. The account appears here when it's done."

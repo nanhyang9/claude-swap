@@ -215,6 +215,24 @@ def looks_like_api_key(credentials: str | None) -> bool:
     return text.startswith("sk-ant-") and not text.startswith(_OAUTH_TOKEN_PREFIXES)
 
 
+def credential_kind(credentials: str | None) -> str | None:
+    """What a stored credential is: ``"login"``, ``"setup_token"`` or ``"api_key"``.
+
+    A login (``/login``) carries a refresh token; a setup-token
+    (``claude setup-token``) is a bare long-lived access token with none; an
+    API key is a raw ``sk-ant-`` string. ``None`` when nothing usable is stored.
+    """
+    if not credentials:
+        return None
+    if looks_like_api_key(credentials):
+        return "api_key"
+    data = _credential_object(credentials)
+    oauth = data.get("claudeAiOauth") if data else None
+    if not isinstance(oauth, dict) or not oauth.get("accessToken"):
+        return None
+    return "login" if oauth.get("refreshToken") else "setup_token"
+
+
 def _credential_object(credentials: str | None) -> dict | None:
     """Parse a JSON credential object, excluding managed API keys."""
     if not credentials or looks_like_api_key(credentials):

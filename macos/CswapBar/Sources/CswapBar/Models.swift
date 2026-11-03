@@ -27,8 +27,25 @@ struct Account: Decodable, Identifiable, Hashable {
     let usageStatus: String
     let usage: AccountUsage?
     let lastGoodUsage: AccountUsage?
+    /// "login" | "setup_token" | "api_key" (absent on older cswap versions).
+    let credentialKind: String?
+    /// Last fetch failure by kind (e.g. "http-403"), when usage is unavailable.
+    let usageError: String?
 
     var id: Int { number }
+
+    var isLogin: Bool { credentialKind == "login" }
+    var isSetupToken: Bool { credentialKind == "setup_token" }
+    var isAPIKey: Bool { credentialKind == "api_key" || usageStatus == "api_key" }
+
+    /// Short label for the kind of sign-in, shown on the card.
+    var kindLabel: String? {
+        switch credentialKind {
+        case "setup_token": return "TOKEN"
+        case "api_key": return "API KEY"
+        default: return nil
+        }
+    }
 
     var displayName: String {
         if let alias, !alias.isEmpty { return alias }
@@ -59,7 +76,14 @@ struct Account: Decodable, Identifiable, Hashable {
         case "relogin_required": return "Re-login needed (cswap add --slot \(number))"
         case "foreign_credential": return "Login belongs to another account"
         case "no_credentials": return "No stored credentials"
-        default: return "Usage unavailable"
+        default:
+            if isSetupToken {
+                // Claude Code itself reads usage only for tokens with the
+                // user:profile scope; setup-tokens are inference-only.
+                return "Usage isn't available for setup-token accounts (the token is inference-only). Switching and using it in Claude Code still work."
+            }
+            if let usageError { return "Usage unavailable (\(usageError))" }
+            return "Usage unavailable"
         }
     }
 }

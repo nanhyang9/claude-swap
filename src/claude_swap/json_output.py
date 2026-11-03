@@ -320,6 +320,7 @@ def account_row(
     disabled: bool = False,
     policy: AccountPolicy = AccountPolicy(),
     login_expires_at: str | None = None,
+    credential_kind: str | None = None,
 ) -> dict:
     """A full account row for ``--list``. ``backoff_until`` is the live
     backoff only; a lapsed one is the caller's to withhold."""
@@ -350,6 +351,11 @@ def account_row(
     # ``relogin_required`` that follows; absent when the login carries none.
     if login_expires_at:
         row["loginExpiresAt"] = login_expires_at
+    # Additive: how the slot signs in ("login" | "setup_token" | "api_key"),
+    # so a front end can offer the right way to renew it. Absent when no
+    # usable credential is stored.
+    if credential_kind:
+        row["credentialKind"] = credential_kind
     if usage is not None:
         row.update(usage_freshness_fields(usage_fetched_at, usage_age_s))
     else:

@@ -47,6 +47,7 @@ from claude_swap.credentials import (  # noqa: F401  (constants re-exported for 
     SECURITY_SERVICE,
     ActiveCredentials,
     CredentialStore,
+    credential_kind,
     looks_like_api_key,
     merge_shared_credential_fields,
     shared_credential_fields,
@@ -4182,6 +4183,91 @@ class ClaudeAccountSwitcher:
         )
         return account_num
 
+    def replace_account_token(self, identifier: str, token: str) -> str:
+        """Replace the stored token of an existing token account, in place.
+
+        Renewing must never create a second account: matching by email (what
+        :meth:`add_account_from_token` does) misses any account that belongs
+        to an organization and adds a duplicate instead. This targets the
+        slot itself and keeps its identity, alias and settings.
+
+        Only token accounts can be renewed this way — a setup-token slot takes
+        a new setup-token, an API-key slot a new API key. A Claude Code login
+        keeps its own refresh-token lineage; it is renewed by signing in again
+        and running ``cswap add``.
+
+        Args:
+            identifier: Account number, email or alias.
+            token: The new token, ``"-"`` to read one line from stdin, or
+                ``""`` to prompt securely via getpass.
+
+        Returns:
+            The account number that was updated.
+        """
+        self._refuse_session_shell()
+        import getpass
+
+        if token == "-":
+            token = sys.stdin.readline().rstrip("\n")
+        elif not token:
+            token = getpass.getpass("Token: ")
+        token = token.strip()
+        if not token:
+            raise ValidationError("Token cannot be empty")
+
+        account_num, email, org_uuid = self.resolve_account(identifier)
+        current_kind = credential_kind(
+            self._read_account_credentials(account_num, email)
+        )
+        is_api_key = looks_like_api_key(token)
+        if current_kind == "login":
+            raise ValidationError(
+                f"Account {account_num} ({email}) is a Claude Code login, not a "
+                "token account. Renew it by signing in again in Claude Code "
+                "(/login) and running `cswap add`; to use a token instead, add "
+                "it as a separate account."
+            )
+        if is_api_key and current_kind == "setup_token":
+            raise ValidationError(
+                f"Account {account_num} holds a setup-token; an API key cannot "
+                "replace it. Add the API key as a separate account."
+            )
+        if not is_api_key and (
+            current_kind == "api_key" or self._account_kind(account_num) == "api_key"
+        ):
+            raise ValidationError(
+                f"Account {account_num} holds an API key; only another API key "
+                "can replace it. Add the setup-token as a separate account."
+            )
+
+        if is_api_key:
+            credentials = token
+        else:
+            credentials = json.dumps({
+                "claudeAiOauth": {
+                    "accessToken": token,
+                    "scopes": list(SETUP_TOKEN_SCOPES),
+                }
+            })
+        self._write_account_credentials(account_num, email, credentials)
+        self._usage_store.clear_dead_token(
+            [account_num], {account_num: (email, org_uuid or "")}
+        )
+        data = self._get_sequence_data()
+        data["lastUpdated"] = get_timestamp()
+        self._write_json(self.sequence_file, data)
+
+        kind_label = "API key" if is_api_key else "token"
+        self._logger.info(f"Replaced {kind_label} for account {account_num}: {email}")
+        print(f"{accent(f'Replaced {kind_label}')} for Account {account_num} ({email}).")
+        current = self._get_current_account()
+        if current and current[0] == email and (current[1] or "") == (org_uuid or ""):
+            print(dimmed(
+                "This account is active: switch away and back for Claude Code "
+                "to pick up the new token."
+            ))
+        return account_num
+
     def remove_account(self, identifier: str, assume_yes: bool = False) -> None:
         """Remove account from managed accounts.
 
@@ -5783,6 +5869,7 @@ class ClaudeAccountSwitcher:
                     disabled=self._disabled_from_data(seq_data, str(num)),
                     policy=self._policy_from_data(seq_data, str(num)),
                     login_expires_at=oauth.login_expires_at_iso(creds),
+                    credential_kind=credential_kind(creds),
                 )
             )
         payload = {

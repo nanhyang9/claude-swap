@@ -120,6 +120,17 @@ enum CswapCLI {
         _ = try checked(runCswap(args, timeout: 60, input: Data((token + "\n").utf8)))
     }
 
+    /// `cswap setup-token - --replace N`: renew token account N in place.
+    static func replaceToken(_ token: String, account number: Int) throws {
+        _ = try checked(runCswap(["setup-token", "-", "--replace", String(number)],
+                                 timeout: 60, input: Data((token + "\n").utf8)))
+    }
+
+    /// `cswap remove N --yes`.
+    static func removeAccount(_ number: Int) throws {
+        _ = try checked(runCswap(["remove", String(number), "--yes"], timeout: 60))
+    }
+
     /// `cswap add`: back up the current Claude Code login as an account.
     static func addCurrentLogin() throws {
         _ = try checked(runCswap(["add"], timeout: 90))

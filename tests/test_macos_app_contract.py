@@ -139,3 +139,27 @@ def test_swift_models_declare_the_pinned_fields():
         "let limits: [ChatGPTLimit]", "let message: String",
     ):
         assert decl in swift, decl
+
+
+def test_credential_kinds_are_ones_the_app_knows():
+    import json as _json
+
+    from claude_swap.credentials import credential_kind
+
+    swift = MODELS_SWIFT.read_text(encoding="utf-8")
+    views = (MODELS_SWIFT.parent / "Views.swift").read_text(encoding="utf-8")
+    samples = [
+        _json.dumps({"claudeAiOauth": {"accessToken": "a", "refreshToken": "r"}}),
+        _json.dumps({"claudeAiOauth": {"accessToken": "a"}}),
+        "sk-ant-api03-" + "k" * 40,
+    ]
+    for creds in samples:
+        kind = credential_kind(creds)
+        assert kind in ("login", "setup_token", "api_key")
+        assert f'"{kind}"' in swift + views, kind
+    row = account_row(1, "a@example.com", "", "", False, None,
+                      last_error="http-403", credential_kind="setup_token")
+    assert row["credentialKind"] == "setup_token"
+    assert row["usageError"] == "http-403"
+    assert "let credentialKind: String?" in swift
+    assert "let usageError: String?" in swift
