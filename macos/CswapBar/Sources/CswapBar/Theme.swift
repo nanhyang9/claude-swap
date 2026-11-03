@@ -59,7 +59,8 @@ struct CardStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .padding(10)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Theme.cardFill)

@@ -1,13 +1,37 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Popover
+// MARK: - Navigation
+
+/// Which account an add/renew flow acts on.
+enum AccountTarget: Equatable {
+    /// A new account is created.
+    case new
+    /// An existing account's sign-in is replaced in place.
+    case renew(email: String, name: String)
+}
+
+enum AddMethod: Equatable {
+    case newToken, pasteToken, currentLogin
+}
 
 enum Panel: Equatable {
     case usage
     case settings
-    case addAccount(email: String?)
+    case chooseMethod(AccountTarget)
+    case method(AccountTarget, AddMethod)
+
+    /// Where the header's back button goes.
+    var parent: Panel? {
+        switch self {
+        case .usage: return nil
+        case .settings, .chooseMethod: return .usage
+        case .method(let target, _): return .chooseMethod(target)
+        }
+    }
 }
+
+// MARK: - Popover
 
 struct ContentView: View {
     @EnvironmentObject private var store: UsageStore
@@ -26,11 +50,13 @@ struct ContentView: View {
                     usagePanel
                 case .settings:
                     SettingsPanel(done: { show(.usage) })
-                case .addAccount(let email):
-                    AddAccountPanel(renewEmail: email, done: { show(.usage) })
+                case .chooseMethod(let target):
+                    MethodChooser(target: target, choose: { show(.method(target, $0)) })
+                case .method(let target, let method):
+                    MethodPanel(target: target, method: method, finished: { show(.usage, keepMessages: true) })
                 }
             }
-            .padding(12)
+            .padding(14)
             Divider()
             footer
                 .padding(.horizontal, 14)
@@ -40,8 +66,8 @@ struct ContentView: View {
         .onAppear { store.refresh() }
     }
 
-    private func show(_ next: Panel) {
-        store.clearMessages()
+    private func show(_ next: Panel, keepMessages: Bool = false) {
+        if !keepMessages { store.clearMessages() }
         withAnimation(.easeInOut(duration: 0.15)) { panel = next }
     }
 
@@ -49,11 +75,27 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "chart.bar.xaxis")
+            if let parent = panel.parent {
+                Button {
+                    show(parent)
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .help("Back")
+                .keyboardShortcut(.cancelAction)
+            } else {
+                Image(systemName: "chart.bar.xaxis")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.activeAccent)
+            }
+            Text(verbatim: title)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Theme.activeAccent)
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer()
             if store.isLoading {
                 ProgressView().controlSize(.small)
@@ -69,7 +111,11 @@ struct ContentView: View {
         switch panel {
         case .usage: return "Claude Swap"
         case .settings: return "Settings"
-        case .addAccount(let email): return email == nil ? "Add account" : "Renew account"
+        case .chooseMethod(.new): return "Add an account"
+        case .chooseMethod(.renew(_, let name)): return "Renew \(name)"
+        case .method(_, .newToken): return "Create a new token"
+        case .method(_, .pasteToken): return "Paste a token or API key"
+        case .method(_, .currentLogin): return "Use Claude Code's login"
         }
     }
 
@@ -77,11 +123,11 @@ struct ContentView: View {
         HStack(spacing: 14) {
             if panel == .usage {
                 Button {
-                    show(.addAccount(email: nil))
+                    show(.chooseMethod(.new))
                 } label: {
-                    Label("Add", systemImage: "plus.circle")
+                    Label("Add account", systemImage: "plus.circle")
                 }
-                .help("Add an account (setup-token, API key, or current login)")
+                .help("Add another Claude account")
                 Button {
                     store.switchToBest()
                 } label: {
@@ -89,12 +135,6 @@ struct ContentView: View {
                 }
                 .help("Switch to the account with the most quota left")
                 .disabled(store.busyMessage != nil || store.accounts.count < 2)
-            } else {
-                Button {
-                    show(.usage)
-                } label: {
-                    Label("Back", systemImage: "chevron.left")
-                }
             }
             Spacer()
             Button {
@@ -123,12 +163,12 @@ struct ContentView: View {
     // MARK: Usage panel
 
     private var usagePanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             StatusMessages()
             if store.accounts.isEmpty {
                 Text(store.isLoading
                      ? "Loading…"
-                     : "No accounts yet. Click Add to add one.")
+                     : "No accounts yet. Click Add account to add one.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -153,7 +193,9 @@ struct ContentView: View {
                     expanded: binding(for: account),
                     actionsDisabled: store.busyMessage != nil,
                     onSwitch: { store.switchTo(account) },
-                    onRenew: { show(.addAccount(email: account.email)) }
+                    onRenew: {
+                        show(.chooseMethod(.renew(email: account.email, name: account.displayName)))
+                    }
                 )
             }
         }
@@ -456,103 +498,307 @@ struct ChatGPTCard: View {
 
 // MARK: - Add / renew account
 
-struct AddAccountPanel: View {
+/// Says, at the top of every add/renew screen, which account is affected.
+struct TargetBanner: View {
+    let target: AccountTarget
+    /// For a new account: the label typed so far (empty = automatic name).
+    var newLabel: String = ""
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.activeAccent)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(Theme.activeAccent.opacity(0.14)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: heading)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(verbatim: name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail {
+                    Text(verbatim: detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .card()
+    }
+
+    private var icon: String {
+        if case .new = target { return "person.crop.circle.badge.plus" }
+        return "arrow.triangle.2.circlepath"
+    }
+
+    private var heading: String {
+        if case .new = target { return "This adds a new account" }
+        return "This replaces the sign-in of"
+    }
+
+    private var name: String {
+        switch target {
+        case .new:
+            let label = newLabel.trimmingCharacters(in: .whitespaces)
+            return label.isEmpty ? "Name: set automatically" : "Name: \(label)"
+        case .renew(_, let name):
+            return name
+        }
+    }
+
+    private var detail: String? {
+        switch target {
+        case .new:
+            return newLabel.trimmingCharacters(in: .whitespaces).isEmpty
+                ? "e.g. setup-token-3@token.local (you can type a label below)"
+                : nil
+        case .renew(let email, let name):
+            return email == name ? nil : email
+        }
+    }
+}
+
+/// First step: pick how to sign the account in.
+struct MethodChooser: View {
+    let target: AccountTarget
+    let choose: (AddMethod) -> Void
+
+    private var isNew: Bool { target == .new }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TargetBanner(target: target)
+            Text(verbatim: "How do you want to sign in?")
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.top, 2)
+            OptionRow(
+                icon: "safari",
+                title: "Create a new token",
+                subtitle: isNew
+                    ? "Sign in to any Claude account in your browser. Recommended."
+                    : "Sign in to this account in your browser to get a fresh token."
+            ) { choose(.newToken) }
+            OptionRow(
+                icon: "key.horizontal",
+                title: "Paste a token or API key",
+                subtitle: isNew
+                    ? "Use a token (sk-ant-oat…) or API key (sk-ant-api…) you already have."
+                    : "Replace this account's token with one you already have."
+            ) { choose(.pasteToken) }
+            OptionRow(
+                icon: "terminal",
+                title: "Use Claude Code's login",
+                subtitle: isNew
+                    ? "Add the account you are signed in to in Claude Code right now."
+                    : "Sign in to this account in Claude Code (/login), then import it."
+            ) { choose(.currentLogin) }
+        }
+    }
+}
+
+struct OptionRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.activeAccent)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(verbatim: subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+            .card()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Second step: the one method chosen, with only the fields it needs.
+struct MethodPanel: View {
     @EnvironmentObject private var store: UsageStore
-    /// Set when renewing an existing account: its token is replaced in place.
-    let renewEmail: String?
-    let done: () -> Void
+    let target: AccountTarget
+    let method: AddMethod
+    let finished: () -> Void
 
     @State private var token = ""
     @State private var email = ""
     @State private var alias = ""
 
+    private var isNew: Bool { target == .new }
+
+    /// The email the command acts on: the renewed account's, or the label.
     private var emailValue: String? {
+        if case .renew(let email, _) = target { return email }
         let e = email.trimmingCharacters(in: .whitespaces)
         return e.isEmpty ? nil : e
     }
 
     private var aliasValue: String? {
+        guard isNew else { return nil }
         let a = alias.trimmingCharacters(in: .whitespaces)
         return a.isEmpty ? nil : a
     }
 
+    private var labelPreview: String {
+        let a = alias.trimmingCharacters(in: .whitespaces)
+        let e = email.trimmingCharacters(in: .whitespaces)
+        switch (a.isEmpty, e.isEmpty) {
+        case (false, false): return "\(a) (\(e))"
+        case (false, true): return a
+        case (true, false): return e
+        case (true, true): return ""
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            TargetBanner(target: target, newLabel: method == .currentLogin ? "" : labelPreview)
             StatusMessages()
-
-            if let renewEmail {
-                Text("Renewing \(renewEmail). Either option below replaces its token in place.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    SectionTitle(text: "Label (optional)")
-                    TextField("Email, e.g. me@example.com", text: $email)
-                    TextField("Short alias, e.g. work", text: $alias)
-                    Text("Setup-tokens carry no email; without a label the account is named setup-token-N@token.local.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .textFieldStyle(.roundedBorder)
-                .card()
+            switch method {
+            case .newToken: newTokenBody
+            case .pasteToken: pasteTokenBody
+            case .currentLogin: currentLoginBody
             }
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                SectionTitle(text: "Create a new token")
-                Text("Opens Terminal and runs `claude setup-token`: sign in in the browser, paste the code back, and the account is added automatically.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Spacer()
-                    Button {
-                        store.createTokenInTerminal(email: renewEmail ?? emailValue, alias: aliasValue)
-                    } label: {
-                        Label("Open Terminal", systemImage: "terminal")
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
+    // Label fields, for a new account made from a token (tokens carry no email).
+    @ViewBuilder
+    private var labelFields: some View {
+        if isNew {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionTitle(text: "Name this account (optional)")
+                TextField("Email, e.g. me@example.com", text: $email)
+                TextField("Short alias, e.g. work", text: $alias)
+            }
+            .textFieldStyle(.roundedBorder)
+            .card()
+        }
+    }
+
+    private var newTokenBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            labelFields
+            VStack(alignment: .leading, spacing: 8) {
+                SectionTitle(text: "What happens")
+                Step(number: 1, text: "A Terminal window opens and runs claude setup-token.")
+                Step(number: 2, text: isNew
+                     ? "Your browser opens. Sign in with the Claude account you want to add."
+                     : "Your browser opens. Sign in as \(renewName).")
+                Step(number: 3, text: "Copy the code the browser shows and paste it into Terminal.")
+                Step(number: 4, text: isNew
+                     ? "The account appears in the list here."
+                     : "This account's token is replaced.")
             }
             .card()
+            HStack {
+                Spacer()
+                Button {
+                    store.createTokenInTerminal(email: emailValue, alias: aliasValue)
+                } label: {
+                    Label("Open Terminal", systemImage: "terminal")
+                        .padding(.horizontal, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                SectionTitle(text: "Use an existing token or API key")
+    private var pasteTokenBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            labelFields
+            VStack(alignment: .leading, spacing: 8) {
+                SectionTitle(text: "Token or API key")
                 SecureField("sk-ant-oat01-…  or  sk-ant-api…", text: $token)
                     .textFieldStyle(.roundedBorder)
-                HStack {
-                    Spacer()
-                    Button("Add token") {
-                        store.addToken(token, email: renewEmail ?? emailValue, alias: aliasValue) { ok in
-                            if ok {
-                                token = ""
-                                done()
-                            }
-                        }
-                    }
-                    .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty || store.busyMessage != nil)
-                }
+                Text(verbatim: "Stored in your Keychain by claude-swap. Never shown again here.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
             }
             .card()
-
-            if renewEmail == nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    SectionTitle(text: "Add the current Claude Code login")
-                    Text("Backs up the account Claude Code is logged in with right now (`/login`).")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack {
-                        Spacer()
-                        Button("Add current login") {
-                            store.addCurrentLogin { ok in if ok { done() } }
+            HStack {
+                Spacer()
+                Button(isNew ? "Add account" : "Replace token") {
+                    store.addToken(token, email: emailValue, alias: aliasValue) { ok in
+                        if ok {
+                            token = ""
+                            finished()
                         }
-                        .disabled(store.busyMessage != nil)
                     }
                 }
-                .card()
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(token.trimmingCharacters(in: .whitespaces).isEmpty || store.busyMessage != nil)
             }
+        }
+    }
+
+    private var currentLoginBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionTitle(text: "What happens")
+                Step(number: 1, text: isNew
+                     ? "Make sure Claude Code is signed in to the account you want to add (run /login in Claude Code if not)."
+                     : "In Claude Code, sign in as \(renewName) (run /login).")
+                Step(number: 2, text: "Click Import. Claude Swap saves that login as an account; an account it already has is updated instead.")
+            }
+            .card()
+            HStack {
+                Spacer()
+                Button("Import") {
+                    store.addCurrentLogin { ok in if ok { finished() } }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(store.busyMessage != nil)
+            }
+        }
+    }
+
+    private var renewName: String {
+        if case .renew(let email, _) = target { return email }
+        return ""
+    }
+}
+
+struct Step: View {
+    let number: Int
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(verbatim: "\(number)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(Theme.activeAccent))
+            Text(verbatim: text)
+                .font(.system(size: 12))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -561,7 +807,7 @@ struct SectionTitle: View {
     let text: String
 
     var body: some View {
-        Text(text)
+        Text(verbatim: text)
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.primary)
     }
