@@ -48,6 +48,8 @@ def _check_account(row: dict) -> None:
     assert isinstance(row["email"], str)
     assert isinstance(row["active"], bool)
     assert isinstance(row["usageStatus"], str)
+    # Part of Account.orderKey, the app's remembered display order.
+    assert isinstance(row["organizationUuid"], str)
     for key in ("usage", "lastGoodUsage"):
         usage = row.get(key)
         if usage is None:

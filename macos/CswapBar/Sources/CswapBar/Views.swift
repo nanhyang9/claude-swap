@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Navigation
 
@@ -23,6 +24,8 @@ struct ContentView: View {
     @EnvironmentObject private var store: UsageStore
     @State private var expandedOverride: [Int: Bool] = [:]
     @State private var panel: Panel = .usage
+    /// orderKey of the card being dragged, while a drag is in progress.
+    @State private var draggingKey: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +59,7 @@ struct ContentView: View {
         .onChange(of: store.openCount) { _ in
             // Every time the popover opens, start from the usage overview.
             panel = .usage
+            draggingKey = nil
         }
     }
 
@@ -184,7 +188,7 @@ struct ContentView: View {
 
     private var cards: some View {
         VStack(spacing: 8) {
-            ForEach(store.accounts) { account in
+            ForEach(store.orderedAccounts) { account in
                 AccountCard(
                     account: account,
                     expanded: binding(for: account),
@@ -200,7 +204,27 @@ struct ContentView: View {
                     },
                     onRemove: { store.removeAccount(account) }
                 )
+                // Drag a card onto another to reorder (the order is kept in
+                // this app only; cswap's slot numbers are unchanged).
+                .opacity(draggingKey == account.orderKey ? 0.45 : 1)
+                .onDrag {
+                    draggingKey = account.orderKey
+                    return NSItemProvider(object: account.orderKey as NSString)
+                }
+                .onDrop(
+                    of: [UTType.text],
+                    delegate: CardDropDelegate(
+                        target: account.orderKey,
+                        dragging: $draggingKey,
+                        move: { store.moveAccount($0, to: $1) }
+                    )
+                )
             }
+        }
+        // A drop between or below the cards still ends the drag.
+        .onDrop(of: [UTType.text], isTargeted: nil) { _ in
+            draggingKey = nil
+            return true
         }
     }
 
@@ -261,10 +285,10 @@ struct AccountCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text(verbatim: "\(account.number)")
-                    .font(.system(size: 10, weight: .bold).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 14)
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .help("Drag to reorder")
                 Text(verbatim: account.displayName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
@@ -360,7 +384,7 @@ struct AccountCard: View {
 
     private var removeConfirmation: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(verbatim: "Remove account \(account.number) (\(account.displayName)) from Claude Swap?")
+            Text(verbatim: "Remove \(account.displayName) from Claude Swap?")
                 .font(.system(size: 12, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
             Text(verbatim: account.active
@@ -829,5 +853,26 @@ private struct ContentHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+/// Live reordering while a card is dragged over another one.
+struct CardDropDelegate: DropDelegate {
+    let target: String
+    @Binding var dragging: String?
+    let move: (String, String) -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging, dragging != target else { return }
+        withAnimation(.easeInOut(duration: 0.15)) { move(dragging, target) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        return true
     }
 }

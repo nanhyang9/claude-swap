@@ -31,8 +31,13 @@ struct Account: Decodable, Identifiable, Hashable {
     let credentialKind: String?
     /// Last fetch failure by kind (e.g. "http-403"), when usage is unavailable.
     let usageError: String?
+    let organizationUuid: String?
 
     var id: Int { number }
+
+    /// Identity that survives removing and re-adding the account (its slot
+    /// number does not), used to remember the display order.
+    var orderKey: String { "\(email)|\(organizationUuid ?? "")" }
 
     var isLogin: Bool { credentialKind == "login" }
     var isSetupToken: Bool { credentialKind == "setup_token" }
@@ -73,7 +78,7 @@ struct Account: Decodable, Identifiable, Hashable {
         case "token_expired": return "Token expired — Claude Code refreshes it on next use"
         case "api_key": return "API key (no subscription quota)"
         case "keychain_unavailable": return "Keychain unavailable"
-        case "relogin_required": return "Re-login needed (cswap add --slot \(number))"
+        case "relogin_required": return "Login expired. Use the sign-in-again button (person with key) to sign in once more."
         case "foreign_credential": return "Login belongs to another account"
         case "no_credentials": return "No stored credentials"
         default:

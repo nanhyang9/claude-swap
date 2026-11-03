@@ -46,6 +46,40 @@ final class UsageStore: ObservableObject {
         refresh()
     }
 
+    /// Display order chosen by dragging, as Account.orderKey values.
+    @Published private(set) var accountOrder: [String] =
+        UserDefaults.standard.stringArray(forKey: "accountOrder") ?? []
+
+    /// Accounts in the user's order; accounts not placed yet follow, by slot.
+    var orderedAccounts: [Account] {
+        let rank = Dictionary(
+            accountOrder.enumerated().map { ($1, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return accounts.sorted { a, b in
+            switch (rank[a.orderKey], rank[b.orderKey]) {
+            case let (x?, y?): return x < y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return a.number < b.number
+            }
+        }
+    }
+
+    /// Move the dragged account to the position of `target`.
+    func moveAccount(_ dragged: String, to target: String) {
+        guard dragged != target else { return }
+        var keys = orderedAccounts.map(\.orderKey)
+        guard let from = keys.firstIndex(of: dragged),
+              let to = keys.firstIndex(of: target) else { return }
+        keys.remove(at: from)
+        keys.insert(dragged, at: to)
+        // Keep remembered positions of accounts that are currently removed.
+        let current = Set(keys)
+        accountOrder = keys + accountOrder.filter { !current.contains($0) }
+        UserDefaults.standard.set(accountOrder, forKey: "accountOrder")
+    }
+
     private static let showChatGPTKey = "showChatGPT"
     private let refreshInterval: TimeInterval = 60
     private let chatgptInterval: TimeInterval = 300
