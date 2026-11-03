@@ -110,22 +110,6 @@ enum CswapCLI {
         _ = try checked(runCswap(["switch", "--strategy", "best", "--json"], timeout: 90))
     }
 
-    /// `cswap setup-token -`: the token goes in on stdin, never on the
-    /// command line (where other processes could see it). An existing
-    /// account with the same email has its token replaced in place.
-    static func addToken(_ token: String, email: String?, alias: String?) throws {
-        var args = ["setup-token", "-"]
-        if let email { args += ["--email", email] }
-        if let alias { args += ["--alias", alias] }
-        _ = try checked(runCswap(args, timeout: 60, input: Data((token + "\n").utf8)))
-    }
-
-    /// `cswap setup-token - --replace N`: renew token account N in place.
-    static func replaceToken(_ token: String, account number: Int) throws {
-        _ = try checked(runCswap(["setup-token", "-", "--replace", String(number)],
-                                 timeout: 60, input: Data((token + "\n").utf8)))
-    }
-
     /// `cswap remove N --yes`.
     static func removeAccount(_ number: Int) throws {
         _ = try checked(runCswap(["remove", String(number), "--yes"], timeout: 60))
@@ -136,27 +120,47 @@ enum CswapCLI {
         _ = try checked(runCswap(["add"], timeout: 90))
     }
 
-    /// Run a cswap command in a new Terminal window (for interactive ones).
+    /// Open Terminal to sign in with `claude auth login`, then import the
+    /// login with `cswap add` (an account it already has is updated).
     ///
     /// Writes a throwaway `.command` script and opens it, which needs no
     /// Automation permission; the script deletes itself when it starts.
-    static func openInTerminal(_ arguments: [String]) throws {
+    static func openLoginInTerminal(email: String?, backupCurrent: Bool) throws {
         guard let cswap = locate() else { throw Failure.notFound }
-        var command: [String]
+        let command: [String]
         if cswap.isBundled, let launcher = bundledLauncher {
             command = [launcher]
         } else {
             command = [cswap.executable] + cswap.leadingArguments
         }
-        command += arguments
-        let line = command.map(shellQuote).joined(separator: " ")
+        let cswapLine = command.map(shellQuote).joined(separator: " ")
+        var login = "claude auth login --claudeai"
+        if let email { login += " --email " + shellQuote(email) }
+        let backup = backupCurrent
+            ? "echo 'Saving the current login in Claude Swap first...'\n  cswap add >/dev/null 2>&1 || true"
+            : ":"
         let script = """
         #!/bin/sh
         rm -f "$0"
         clear
-        \(line)
+        cswap() { \(cswapLine) "$@"; }
+        if ! command -v claude >/dev/null 2>&1; then
+          echo "Claude Code (the claude command) was not found in this Terminal."
+          echo "Install Claude Code, then try again."
+        else
+          \(backup)
+          echo "Opening the Claude sign-in page in your browser..."
+          echo
+          if \(login); then
+            echo
+            cswap add
+          else
+            echo
+            echo "Sign-in did not finish, so nothing was added."
+          fi
+        fi
         echo
-        printf 'Done. You can close this window.'
+        printf 'You can close this window.'
         read -r _
         """
         let url = FileManager.default.temporaryDirectory

@@ -37,6 +37,15 @@ final class UsageStore: ObservableObject {
     /// Which claude-swap the app runs, for the Settings panel.
     @Published private(set) var cswapDescription: String = ""
 
+    /// Bumped every time the popover opens (the view resets to the overview).
+    @Published private(set) var openCount = 0
+
+    func popoverOpened() {
+        openCount += 1
+        clearMessages()
+        refresh()
+    }
+
     private static let showChatGPTKey = "showChatGPT"
     private let refreshInterval: TimeInterval = 60
     private let chatgptInterval: TimeInterval = 300
@@ -129,25 +138,6 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// Add a new account from a token.
-    func addToken(_ token: String, email: String?, alias: String?,
-                  completion: @escaping (Bool) -> Void) {
-        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        perform("Adding the account…", success: "Account added.", completion: completion) {
-            try CswapCLI.addToken(value, email: email, alias: alias)
-        }
-    }
-
-    /// Renew an existing token account in place (same slot).
-    func replaceToken(_ token: String, account number: Int, name: String,
-                      completion: @escaping (Bool) -> Void) {
-        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        perform("Replacing the token…", success: "Token replaced for \(name).",
-                completion: completion) {
-            try CswapCLI.replaceToken(value, account: number)
-        }
-    }
-
     func removeAccount(_ account: Account) {
         perform("Removing \(account.displayName)…",
                 success: "Removed \(account.displayName).") {
@@ -162,20 +152,15 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    /// `claude setup-token` needs a terminal (browser sign-in, pasted code),
-    /// so it runs in Terminal; the new account shows up on the next refresh.
-    func createTokenInTerminal(email: String?, alias: String?, replacing number: Int? = nil) {
+    /// Sign in to a Claude account in Terminal (`claude auth login`) and
+    /// import it. With `email`, the login page is pre-filled for that account.
+    func signInInTerminal(email: String?) {
         clearMessages()
-        var args = ["setup-token", "--new"]
-        if let number {
-            args += ["--replace", String(number)]
-        } else {
-            if let email { args += ["--email", email] }
-            if let alias { args += ["--alias", alias] }
-        }
         do {
-            try CswapCLI.openInTerminal(args)
-            noticeMessage = "Finish in the Terminal window. The account appears here when it's done."
+            // Save the live login of a managed account first: signing in
+            // replaces it, and its newest refresh token exists only there.
+            try CswapCLI.openLoginInTerminal(email: email, backupCurrent: activeAccount != nil)
+            noticeMessage = "Finish signing in in the Terminal window. The account appears here when it's done."
         } catch {
             errorMessage = error.localizedDescription
         }

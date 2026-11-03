@@ -47,16 +47,30 @@ working on it is not something claude-swap is tested for.
 
 ## Using it
 
-- **Click the icon**: the panel opens. The active account is expanded; click
-  any other account to expand it and switch to it.
+- **Click the icon**: the panel opens under it. The active account is
+  expanded; click any other account to expand it.
+- **Header** (always visible): Refresh, Settings, Quit. Refresh re-reads
+  cswap now; Claude usage is still paced by cswap (an account is fetched at
+  most every few minutes), ChatGPT usage is fetched again immediately.
+- **Add account**: opens Terminal, runs `claude auth login` (sign in in the
+  browser with the account to add) and imports the login with `cswap add`.
+  The current login is saved first so it is not lost. Claude Code stays
+  signed in to the new account; switch back from the list. If Claude Code is
+  already signed in to the account, *Import current login* does it without
+  Terminal.
+- **On an account**: *Switch*, *Sign in again…* (same Terminal flow,
+  pre-filled with the account's email, for an expired login) and the trash
+  button to remove it from Claude Swap.
 - **Switch to best**: moves to the account with the most quota left
   (`cswap switch --strategy best`).
-- **Refresh**: re-reads cswap now. Claude usage is still paced by cswap
-  (an account is fetched at most every few minutes), ChatGPT usage is
-  fetched again immediately.
-- **Settings** (gear): show/hide ChatGPT, launch at login, and which
-  claude-swap is used — the bundled one by default, or the path of another
-  `cswap` you set there.
+- **Bars** are green under 50%, amber to 75%, orange to 90%, red above; each
+  window shows the time left and the reset date and time.
+
+Only full Claude logins show usage: setup-tokens are inference-only (Claude
+Code itself reads usage only for tokens with the `user:profile` scope) and API
+keys have no plan quota. The app therefore adds accounts by signing in; tokens
+and API keys can still be added from the command line with
+`cswap setup-token`, and switch like any other account.
 
 The panel re-reads cswap every 60 seconds and ChatGPT every 5 minutes.
 
