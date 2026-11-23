@@ -27,6 +27,7 @@ from claude_swap.exceptions import (
 )
 from claude_swap import oauth, pace
 from claude_swap.claude_locks import claude_config_lock, claude_credentials_lock
+from claude_swap.hooks import run_post_switch_hook
 from claude_swap.json_output import (
     SCHEMA_VERSION,
     USAGE_API_KEY,
@@ -6968,6 +6969,24 @@ class ClaudeAccountSwitcher:
         )
 
     def _perform_switch(
+        self,
+        target_account: str,
+        emit_output: bool = True,
+        force_activate: bool = False,
+        provenance: dict | None = None,
+    ) -> dict:
+        """Run the core switch, then fire the post-switch hook on success; a
+        core exception propagates without starting the hook."""
+        op = self._perform_switch_core(
+            target_account,
+            emit_output=emit_output,
+            force_activate=force_activate,
+            provenance=provenance,
+        )
+        run_post_switch_hook(self.backup_dir, op)
+        return op
+
+    def _perform_switch_core(
         self,
         target_account: str,
         emit_output: bool = True,

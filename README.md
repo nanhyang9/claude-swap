@@ -290,6 +290,7 @@ cswap config set autoswitch.weeklyThreshold 97  # own switch line for the 7-day/
 cswap config set autoswitch.model Fable   # per-model switching (see "auto"); Fable,Opus for several
 cswap config set run.shareHistory true    # every cswap run shares chat history (see "run")
 cswap config set updates.check false      # no daily PyPI lookup for the "newer version" hint
+cswap config set hooks.postSwitch '/path/to/script.sh'  # run after every successful switch; gets CSWAP_TO_ACCOUNT/EMAIL, CSWAP_FROM_ACCOUNT/EMAIL
 cswap config unset autoswitch.threshold   # back to the default
 cswap config path                         # where settings.json lives
 ```

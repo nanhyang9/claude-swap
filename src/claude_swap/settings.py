@@ -2,8 +2,8 @@
 
 One versioned JSON file for user-tunable claude-swap preferences, written
 atomically with the backup dir's 0600/0700 modes. v1 carries the
-``autoswitch``, ``ui``, ``run`` and ``updates`` sections; other sections can be added
-additively.
+``autoswitch``, ``ui``, ``run``, ``updates`` and ``hooks`` sections; other sections
+can be added additively.
 Unknown keys (future fields, other tools' experiments) survive a round trip.
 
 Reading is forgiving — a missing or corrupt file yields defaults with a logged
@@ -95,11 +95,20 @@ class UpdateSettings:
     check: bool = True
 
 
+@dataclass(frozen=True)
+class HookSettings:
+    """Shell hooks (``hooks`` section). ``post_switch`` runs in the background
+    after every successful account switch; None disables it."""
+
+    post_switch: str | None = None
+
+
 _SECTION_DEFAULT_SOURCES = {
     "autoswitch": AutoSwitchSettings,
     "ui": UiSettings,
     "run": RunSettings,
     "updates": UpdateSettings,
+    "hooks": HookSettings,
 }
 
 
@@ -183,6 +192,11 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "updates", "check", "check", "bool",
             help="Check PyPI once a day and print a hint when a newer release exists",
+        ),
+        SettingSpec(
+            "hooks", "postSwitch", "post_switch", "string",
+            help="Shell command run in the background after each successful switch "
+            "(gets CSWAP_TO_ACCOUNT, CSWAP_TO_EMAIL, CSWAP_FROM_ACCOUNT, CSWAP_FROM_EMAIL)",
         ),
     )
 }
@@ -326,6 +340,26 @@ def load_update_settings(backup_root: Path) -> UpdateSettings:
         )
         return default
     return UpdateSettings(check=check)
+
+
+def load_hook_settings(backup_root: Path) -> HookSettings:
+    """Load the hooks section; missing/corrupt file, non-dict section, or a
+    non-string/blank command → default (no hook)."""
+    section = _read_raw(settings_path(backup_root)).get("hooks")
+    default = HookSettings()
+    if not isinstance(section, dict):
+        return default
+    if "postSwitch" not in section:
+        return default
+    command = section["postSwitch"]
+    if not isinstance(command, str) or not command.strip():
+        _logger.warning(
+            "settings.json: hooks.postSwitch %r is not a non-empty string; "
+            "ignoring it",
+            command,
+        )
+        return default
+    return HookSettings(post_switch=command.strip())
 
 
 def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
@@ -501,6 +535,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
         "ui": load_ui_settings(backup_root),
         "run": load_run_settings(backup_root),
         "updates": load_update_settings(backup_root),
+        "hooks": load_hook_settings(backup_root),
     }
     rows = []
     for spec in SETTING_SPECS.values():
